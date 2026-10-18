@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# CTA Lab 依赖（Python 3.10+，实测 3.13.14 通过）
+#
+# 安装：
+#     python -m venv .venv
+#     .venv\Scripts\python -m pip install -r requirements.txt
+# ---------------------------------------------------------------------------
+
+# --- 回测核心：vnpy 4.5（含 PySide6 GUI、ta-lib 指标库、plotly 图表） ---
+vnpy==4.5.0
+
+# --- vnpy 官方 App：策略引擎 / 回测引擎 / 数据管理 / SQLite 存储 ---
+vnpy_ctastrategy>=1.4.1
+vnpy_ctabacktester>=1.3.0
+vnpy_datamanager>=1.2.0
+vnpy_sqlite>=1.1.3
+
+# --- Web 图表界面（TradingView 风格）---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# ---------------------------------------------------------------------------
+# 说明：
+#   1. 行情数据默认走新浪财经日线接口，东财作为备选，均用标准库 urllib
+#      直接请求，**不需要 akshare / tushare / 任何 token**。
+#   2. 图表库 lightweight-charts v5.2.1 已随项目打包在
+#      cta_lab/web/static/lightweight-charts.js，无需 npm 安装。
+#   3. 如需 DuckDB 存储（大数据量更快），额外安装：
+#          pip install vnpy_duckdb
+#   4. 如需从 CTP/SIMNOW 拉 tick 或做仿真交易，额外安装：
+#          pip install vnpy_ctp
+# ---------------------------------------------------------------------------

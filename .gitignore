@@ -1,0 +1,11 @@
+# vnpy 运行目录（数据库、日志、窗口状态）
+.vntrader/
+# 回测输出
+results/
+# 非原生粒度数据(列式文件,可能很大)
+data/alt/
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/

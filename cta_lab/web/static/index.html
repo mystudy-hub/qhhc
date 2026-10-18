@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CTA Lab · 期货图表</title>
+<script src="/static/lightweight-charts.js"></script>
+<style>
+  :root {
+    --bg:        #131722;
+    --panel:     #1e222d;
+    --panel-2:   #252a37;
+    --border:    #2a2e39;
+    --text:      #d1d4dc;
+    --text-dim:  #787b86;
+    --up:        #26a69a;
+    --down:      #ef5350;
+    --accent:    #2962ff;
+    --hover:     #2f3542;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 "Microsoft YaHei", Roboto, sans-serif;
+    font-size: 13px; overflow: hidden;
+  }
+  #app { display: flex; height: 100vh; }
+
+  /* ---------- 左侧品种栏 ---------- */
+  #sidebar {
+    width: 208px; flex: 0 0 208px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+  }
+  #sidebar h1 {
+    margin: 0; padding: 12px 14px 10px;
+    font-size: 13px; font-weight: 600; letter-spacing: .3px;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+  #symbol-search {
+    margin: 8px 10px;
+    padding: 6px 9px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 4px; color: var(--text); font-size: 12px;
+    outline: none;
+  }
+  #symbol-search:focus { border-color: var(--accent); }
+  #symbol-list { flex: 1; overflow-y: auto; padding-bottom: 8px; }
+  .sym-group {
+    padding: 8px 14px 4px; font-size: 11px;
+    color: var(--text-dim); text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+  .sym-item {
+    padding: 5px 14px; cursor: pointer;
+    display: flex; justify-content: space-between; gap: 6px;
+    border-left: 2px solid transparent;
+  }
+  .sym-item:hover { background: var(--hover); }
+  .sym-item.active {
+    background: var(--panel-2); border-left-color: var(--accent);
+  }
+  .sym-item .code { font-weight: 600; }
+  .sym-item .nm { color: var(--text-dim); font-size: 11px; }
+
+  /* ---------- 主区域 ---------- */
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  #toolbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 14px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .tb-group { display: flex; align-items: center; gap: 6px; }
+  .tb-label { color: var(--text-dim); font-size: 11px; }
+  .tb-title { font-weight: 600; font-size: 15px; margin-right: 4px; }
+  .tb-title .ex { color: var(--text-dim); font-size: 11px; font-weight: 400; }
+
+  button, select {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 10px; font-size: 12px; cursor: pointer;
+    font-family: inherit;
+  }
+  button:hover, select:hover { background: var(--hover); }
+  button.active {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+  button.primary {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+    font-weight: 600;
+  }
+  button.primary:hover { filter: brightness(1.12); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input[type=number], input[type=date] {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 7px; font-size: 12px; font-family: inherit;
+    width: 92px;
+  }
+
+  #chart-wrap { flex: 1; position: relative; min-height: 0; }
+  #chart { position: absolute; inset: 0; }
+
+  #legend {
+    position: absolute; top: 8px; left: 12px; z-index: 5;
+    font-size: 11px; pointer-events: none;
+    display: flex; gap: 14px; flex-wrap: wrap;
+    text-shadow: 0 1px 3px rgba(0,0,0,.85);
+  }
+  #legend .lg { display: flex; gap: 5px; align-items: center; }
+  #legend .sw { width: 9px; height: 2px; border-radius: 1px; }
+  #legend .val { color: var(--text); font-variant-numeric: tabular-nums; }
+
+  #wyckoff-legend {
+    position: absolute; bottom: 10px; left: 12px; z-index: 5;
+    font-size: 11px; color: var(--text-dim); pointer-events: none;
+    background: rgba(19,23,34,.72); border-radius: 4px;
+    padding: 4px 9px; display: none; gap: 12px;
+    text-shadow: 0 1px 3px rgba(0,0,0,.85);
+  }
+  #wyckoff-legend.on { display: flex; flex-wrap: wrap; max-width: 80%; }
+  .badge-tag { padding: 1px 5px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+  #readout {
+    position: absolute; top: 28px; left: 12px; z-index: 5;
+    font-size: 11px; color: var(--text-dim); pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0,0,0,.85);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- 底部统计 ---------- */
+  #stats {
+    height: 0; overflow: hidden;
+    background: var(--panel); border-top: 1px solid var(--border);
+    transition: height .18s ease;
+  }
+  #stats.open { height: 232px; }
+  #stats-inner { padding: 10px 14px; height: 100%; overflow-y: auto; }
+  #stats h2 {
+    margin: 0 0 8px; font-size: 12px; font-weight: 600;
+    color: var(--text-dim); letter-spacing: .4px; text-transform: uppercase;
+  }
+  .kpi-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .kpi {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 5px; padding: 7px 12px; min-width: 104px;
+  }
+  .kpi .k { font-size: 10px; color: var(--text-dim); margin-bottom: 3px; }
+  .kpi .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .pos { color: var(--up); }
+  .neg { color: var(--down); }
+  #notes { margin: 0; padding-left: 18px; color: var(--text-dim); line-height: 1.75; }
+  #warning {
+    background: rgba(239,83,80,.12);
+    border: 1px solid rgba(239,83,80,.55);
+    border-left: 3px solid var(--down);
+    border-radius: 4px;
+    padding: 8px 12px; margin-bottom: 10px;
+    color: #ffb3b0; font-size: 12px; line-height: 1.7;
+  }
+  #warning b { color: #fff; }
+  #notes li::marker { color: var(--accent); }
+
+  #spinner {
+    position: absolute; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(19,23,34,.62); z-index: 20;
+    font-size: 13px; color: var(--text);
+  }
+  #spinner.on { display: flex; }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    margin-right: 9px; animation: pulse .9s infinite ease-in-out;
+  }
+  @keyframes pulse { 0%,100%{opacity:.25} 50%{opacity:1} }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #3a3f4b; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- 左侧品种 -->
+  <aside id="sidebar">
+    <h1>CTA LAB · 期货</h1>
+    <input id="symbol-search" type="text" placeholder="搜索代码 / 名称…" autocomplete="off">
+    <div id="symbol-list"></div>
+  </aside>
+
+  <!-- 主区 -->
+  <div id="main">
+    <div id="toolbar">
+      <div class="tb-group">
+        <span class="tb-title" id="tb-title">—</span>
+      </div>
+
+      <div class="tb-group">
+        <span class="tb-label">周期</span>
+        <button data-interval="d"  class="iv-btn active">日线</button>
+        <button data-interval="1h" class="iv-btn">1小时</button>
+        <button data-interval="1m" class="iv-btn">1分钟</button>
+      </div>
+
+      <div class="tb-group">
+        <span class="tb-label">指标</span>
+        <button data-ind="ma"  class="ind-btn active">MA</button>
+        <button data-ind="ema" class="ind-btn">EMA</button>
+        <button data-ind="boll" class="ind-btn">BOLL</button>
+        <button data-ind="macd" class="ind-btn">MACD</button>
+        <button data-ind="rsi" class="ind-btn">RSI</button>
+        <button data-ind="atr" class="ind-btn">ATR</button>
+      </div>
+
+      <div class="tb-group">
+        <span class="tb-label">形态</span>
+        <button id="btn-wyckoff" title="标注维科夫结构：SC/AR/ST/弹簧/测试/SOS/LPS">维科夫</button>
+        <button id="btn-wyckoff-mode" title="切换宏观大跨度(年均1~2个大区间)与微观短线跨度" style="display:none">宏观跨度</button>
+        <button id="btn-wyckoff-pure" title="仅交易 TEST / LPS 经典点，过滤 FTI 破冰" style="display:none">纯核心</button>
+        <button id="btn-wyckoff-brackets" title="显示/隐藏持仓止损/目标盒" style="display:none">交易盒</button>
+        <button id="btn-compare">多品种叠加</button>
+      </div>
+
+      <div class="tb-group">
+        <span class="tb-label">回测</span>
+        <select id="strategy-sel"></select>
+        <button id="btn-backtest" class="primary">运行回测</button>
+      </div>
+
+      <div class="tb-group" style="margin-left:auto">
+        <button id="btn-stats">绩效面板</button>
+      </div>
+    </div>
+
+    <div id="chart-wrap">
+      <div id="chart"></div>
+      <div id="legend"></div>
+      <div id="readout"></div>
+      <div id="wyckoff-legend"></div>
+      <div id="spinner"><span class="dot"></span><span id="spinner-text">加载中…</span></div>
+    </div>
+
+    <div id="stats">
+      <div id="stats-inner">
+        <div id="warning" style="display:none"></div>
+        <h2>回测绩效</h2>
+        <div class="kpi-row" id="kpi-row"></div>
+        <h2>策略诊断</h2>
+        <ul id="notes"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
