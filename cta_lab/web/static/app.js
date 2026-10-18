@@ -762,17 +762,36 @@
 
   /* ------------------------------------------------------------ 维科夫 */
   const WYCKOFF_STYLE = {
+    // Phase A
+    PS:  { pos: 'belowBar', shape: 'circle',   color: '#80cbc4' },
+    PSY: { pos: 'aboveBar', shape: 'circle',   color: '#ffcc80' },
     SC:  { pos: 'belowBar', shape: 'circle',   color: '#ef5350' },
     BC:  { pos: 'aboveBar', shape: 'circle',   color: '#ef5350' },
     AR:  { pos: 'belowBar', shape: 'square',   color: '#f0b90b' },
+    AR_DIST: { pos: 'aboveBar', shape: 'square', color: '#f0b90b' },
     ST:  { pos: 'belowBar', shape: 'square',   color: '#2196f3' },
-    SPRING: { pos: 'belowBar', shape: 'circle', color: '#7e57c2' },
-    SPRING_RECOVERED: { pos: 'belowBar', shape: 'arrowUp', color: '#7e57c2' },
-    UTAD: { pos: 'aboveBar', shape: 'circle', color: '#7e57c2' },
-    UTAD_RECOVERED: { pos: 'aboveBar', shape: 'arrowDown', color: '#7e57c2' },
+    ST_DIST: { pos: 'aboveBar', shape: 'square', color: '#2196f3' },
+    // Phase B
+    UT:   { pos: 'aboveBar', shape: 'arrowDown', color: '#ffa726' },
+    UT_B: { pos: 'aboveBar', shape: 'arrowDown', color: '#ffa726' },
+    SOW_B:{ pos: 'belowBar', shape: 'arrowUp',   color: '#90a4ae' },
+    // Phase C
+    SPRING: { pos: 'belowBar', shape: 'circle', color: '#ab47bc' },
+    SPRING_REC: { pos: 'belowBar', shape: 'arrowUp', color: '#ab47bc' },
+    'SPRING_#3': { pos: 'belowBar', shape: 'arrowUp', color: '#26a69a' },
+    SPRING_RECOVERED: { pos: 'belowBar', shape: 'arrowUp', color: '#ab47bc' },
+    UTAD: { pos: 'aboveBar', shape: 'circle', color: '#d32f2f' },
+    'UTAD_#3': { pos: 'aboveBar', shape: 'arrowDown', color: '#b71c1c' },
+    UTAD_REC: { pos: 'aboveBar', shape: 'arrowDown', color: '#d32f2f' },
+    UTAD_RECOVERED: { pos: 'aboveBar', shape: 'arrowDown', color: '#d32f2f' },
     TEST: { pos: 'belowBar', shape: 'arrowUp', color: '#26a69a' },
     TEST_SELL: { pos: 'aboveBar', shape: 'arrowDown', color: '#ef5350' },
-    SOS: { pos: 'belowBar', shape: 'arrowUp', color: '#26a69a' },
+    // Phase D
+    SOS: { pos: 'belowBar', shape: 'arrowUp', color: '#00e676' },
+    JAC: { pos: 'belowBar', shape: 'arrowUp', color: '#00e676' },
+    JAC_BREAKOUT: { pos: 'belowBar', shape: 'arrowUp', color: '#00e676' },
+    BUEC: { pos: 'belowBar', shape: 'arrowUp', color: '#00b0ff' },
+    BUEC_ICE: { pos: 'aboveBar', shape: 'arrowDown', color: '#ff3d00' },
     SOW: { pos: 'aboveBar', shape: 'arrowDown', color: '#ef5350' },
     LPS: { pos: 'belowBar', shape: 'arrowUp', color: '#00897b' },
     LPSY: { pos: 'aboveBar', shape: 'arrowDown', color: '#c62828' },
@@ -891,47 +910,61 @@
       });
     });
 
+    // 计算当前品种 K 线真实价格极值（用于彻底过滤离群异常值，防止 Y 轴坐标被撑爆压扁）
+    let minBarPrice = 0;
+    let maxBarPrice = Infinity;
+    if (state.bars && state.bars.length > 0) {
+      minBarPrice = state.bars.reduce((m, b) => Math.min(m, b.low), Infinity);
+      maxBarPrice = state.bars.reduce((m, b) => Math.max(m, b.high), -Infinity);
+    }
+    const isValidPrice = (v) => {
+      if (!Number.isFinite(v) || v <= 0) return false;
+      if (minBarPrice !== Infinity && maxBarPrice !== -Infinity) {
+        if (v < minBarPrice * 0.2 || v > maxBarPrice * 5.0) return false;
+      }
+      return true;
+    };
+
     // 2. 维科夫箱体带 (Ice Line 支撑 / Creek Line 阻力)
     sides.forEach(side => {
       (side.ranges || []).forEach(r => {
         if (!r.end || r.start === r.end) return;
+        // 只有冰线与小溪线均有效成型(>0)且在合理价格范围内，才绘制箱体带
+        if (!isValidPrice(r.ice) || !isValidPrice(r.creek)) return;
+
         const isLong = r.direction === 'long';
         const iceColor = isLong ? '#26a69a' : '#ef5350';
         const creekColor = isLong ? '#2962ff' : '#ff6d00';
 
         // 冰线 (实线, 加粗)
-        if (r.ice) {
-          const iceLine = chart.addSeries(LWC.LineSeries, {
-            color: iceColor,
-            lineWidth: 2,
-            lineStyle: 0,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            crosshairMarkerVisible: false,
-          }, 0);
-          iceLine.setData([
-            { time: r.start, value: r.ice },
-            { time: r.end, value: r.ice },
-          ]);
-          state.wyckoffSeries.push(iceLine);
-        }
+        const iceLine = chart.addSeries(LWC.LineSeries, {
+          color: iceColor,
+          lineWidth: 2,
+          lineStyle: 0,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        }, 0);
+        iceLine.setData([
+          { time: r.start, value: r.ice },
+          { time: r.end, value: r.ice },
+        ]);
+        state.wyckoffSeries.push(iceLine);
 
         // 小溪线 (虚线)
-        if (r.creek) {
-          const creekLine = chart.addSeries(LWC.LineSeries, {
-            color: creekColor,
-            lineWidth: 1,
-            lineStyle: 2,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            crosshairMarkerVisible: false,
-          }, 0);
-          creekLine.setData([
-            { time: r.start, value: r.creek },
-            { time: r.end, value: r.creek },
-          ]);
-          state.wyckoffSeries.push(creekLine);
-        }
+        const creekLine = chart.addSeries(LWC.LineSeries, {
+          color: creekColor,
+          lineWidth: 1,
+          lineStyle: 2,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        }, 0);
+        creekLine.setData([
+          { time: r.start, value: r.creek },
+          { time: r.end, value: r.creek },
+        ]);
+        state.wyckoffSeries.push(creekLine);
       });
     });
 
@@ -964,25 +997,27 @@
           text: `${isWin ? '+' : ''}${t.r.toFixed(1)}R (${t.exit_reason})`,
         });
 
-        // 如果开启交易盒：绘制进出场盈亏连线 + 止损线 + 目标线
+        // 如果开启交易盒：绘制进出场盈亏连线 + 止损线 + 目标线（严格校验价格有效性）
         if (state.wyckoffBracketsOn) {
           // A. 进出场价格连线 (实线)
-          const tradeLine = chart.addSeries(LWC.LineSeries, {
-            color: pnlColor,
-            lineWidth: 2,
-            lineStyle: 0,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            crosshairMarkerVisible: false,
-          }, 0);
-          tradeLine.setData([
-            { time: t.entry_time, value: t.entry_price },
-            { time: t.exit_time, value: t.exit_price },
-          ]);
-          state.wyckoffBracketSeries.push(tradeLine);
+          if (isValidPrice(t.entry_price) && isValidPrice(t.exit_price)) {
+            const tradeLine = chart.addSeries(LWC.LineSeries, {
+              color: pnlColor,
+              lineWidth: 2,
+              lineStyle: 0,
+              priceLineVisible: false,
+              lastValueVisible: false,
+              crosshairMarkerVisible: false,
+            }, 0);
+            tradeLine.setData([
+              { time: t.entry_time, value: t.entry_price },
+              { time: t.exit_time, value: t.exit_price },
+            ]);
+            state.wyckoffBracketSeries.push(tradeLine);
+          }
 
           // B. 目标止盈线 (绿色短虚线)
-          if (t.target) {
+          if (isValidPrice(t.target)) {
             const targetLine = chart.addSeries(LWC.LineSeries, {
               color: 'rgba(38, 166, 154, 0.75)',
               lineWidth: 1,
@@ -999,7 +1034,7 @@
           }
 
           // C. 止损保护线 (红色短虚线)
-          if (t.stop) {
+          if (isValidPrice(t.stop)) {
             const stopLine = chart.addSeries(LWC.LineSeries, {
               color: 'rgba(239, 83, 80, 0.75)',
               lineWidth: 1,
@@ -1029,8 +1064,10 @@
     legend.classList.add('on');
     const modeBadge = data.mode === 'macro' ? '宏观跨度' : '微观短线';
     const bridgeBadge = data.is_bridged ? ' (指数平滑桥接)' : '';
+    const proBadge = data.is_pro ? '<span style="color:#00e676;font-weight:600;margin-right:4px;">[Pro专业版]</span>' : '';
     legend.innerHTML =
-      `<span style="color:#2962ff;font-weight:600">● ${modeBadge}${bridgeBadge}</span>`
+      proBadge
+      + `<span style="color:#2962ff;font-weight:600">● ${modeBadge}${bridgeBadge}</span>`
       + `<span>吸筹 <b>${data.accumulation?.ranges?.length || 0}</b> 区间 (${accN}事件)</span>`
       + `<span>派发 <b>${data.distribution?.ranges?.length || 0}</b> 区间 (${distN}事件)</span>`
       + `<span style="color:#26a69a">━ 冰线</span>`

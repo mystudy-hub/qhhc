@@ -46,6 +46,7 @@ class FutureSpec:
     size: float            # 合约乘数
     pricetick: float       # 最小变动价位
     margin_rate: float = 0.10   # 保证金率（回测资金占用参考）
+    limit_pct: float = 0.05     # 涨跌停幅度（默认 5%，用于回测流动性封板保护）
 
     @property
     def em_symbol(self) -> str:
@@ -148,8 +149,37 @@ _RAW: list[tuple[str, str, Exchange, float, float]] = [
     ("TL", "30年国债", Exchange.CFFEX, 10000, 0.01),
 ]
 
+# 各品种国内期货交易所基准涨跌停幅度（基准日合约规格，排除极端临近交割扩大）
+DEFAULT_LIMIT_PCT: dict[str, float] = {
+    # 黑色系
+    "rb": 0.07, "hc": 0.07, "i": 0.09, "j": 0.08, "jm": 0.08, "ss": 0.07, "wr": 0.07,
+    # 有色金属
+    "cu": 0.07, "bc": 0.07, "al": 0.07, "zn": 0.06, "pb": 0.06, "ni": 0.09, "sn": 0.09, "ao": 0.08,
+    # 贵金属
+    "au": 0.07, "ag": 0.08,
+    # 能源化工与航运
+    "sc": 0.10, "lu": 0.08, "fu": 0.08, "bu": 0.07, "ru": 0.08, "nr": 0.08, "br": 0.08,
+    "l": 0.06, "v": 0.06, "pp": 0.06, "eg": 0.06, "eb": 0.06, "pg": 0.07,
+    "ta": 0.06, "ma": 0.07, "sa": 0.08, "fg": 0.08, "ur": 0.07, "sp": 0.07, "ec": 0.16,
+    # 农产品与软商品
+    "c": 0.05, "cs": 0.05, "a": 0.06, "b": 0.06, "m": 0.06, "y": 0.07, "p": 0.07, "oi": 0.07,
+    "rm": 0.06, "cf": 0.06, "sr": 0.06, "ap": 0.08, "cj": 0.08, "jd": 0.06, "lh": 0.08,
+    # 广期所
+    "lc": 0.10, "si": 0.08, "ps": 0.08,
+    # 中金所股指与国债
+    "if": 0.10, "ih": 0.10, "ic": 0.10, "im": 0.10,
+    "t": 0.02, "tf": 0.02, "tl": 0.02, "ts": 0.012,
+}
+
 FUTURES: dict[str, FutureSpec] = {
-    code: FutureSpec(code, name, ex, size, tick)
+    code: FutureSpec(
+        symbol=code,
+        name=name,
+        exchange=ex,
+        size=size,
+        pricetick=tick,
+        limit_pct=DEFAULT_LIMIT_PCT.get(code.lower(), 0.06),
+    )
     for code, name, ex, size, tick in _RAW
 }
 
@@ -174,6 +204,7 @@ def get_spec(symbol: str) -> FutureSpec:
                 exchange=base_spec.exchange,
                 size=base_spec.size,
                 pricetick=base_spec.pricetick,
+                limit_pct=base_spec.limit_pct,
             )
 
     raise KeyError(

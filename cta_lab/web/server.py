@@ -251,8 +251,10 @@ def api_wyckoff(
     pure_wyckoff: bool = Query(False, description="是否仅交易纯维科夫信号(TEST/LPS)"),
     mode: str = Query("macro", description="macro(宏观日线跨度) 或 micro(微观短线)"),
     bridge_index: bool = Query(True, description="是否启用无跳空指数识别与主连真实撮合桥接"),
+    use_pro: bool = Query(True, description="是否使用 Pro 专业版全套五阶段引擎(默认开启)"),
+    weekly_filter: bool = Query(False, description="是否启用 MTF 周线宏观大背景过滤器"),
 ) -> JSONResponse:
-    """返回维科夫结构事件、交易区间、右侧信号与逐 K 回测进出场（支持宏观/微观模式及指数桥接）。"""
+    """返回维科夫结构事件、交易区间、右侧信号与逐 K 回测进出场（支持 Pro 专业版与跨资产桥接）。"""
     from datetime import datetime
 
     from ..wyckoff import TradeConfig, run_backtest
@@ -283,6 +285,8 @@ def api_wyckoff(
             engine_config=ecfg,
             trade_config=tcfg,
             bridge_index=bridge_index,
+            use_pro=use_pro,
+            use_weekly_filter=weekly_filter,
             db=get_db(),
         )
     except Exception as exc:  # noqa: BLE001
@@ -301,6 +305,8 @@ def api_wyckoff(
                     "name": e.name,
                     "price": round(float(e.price), 4),
                     "direction": e.direction,
+                    "phase": getattr(e, "phase", ""),
+                    "nine_tests": getattr(e, "nine_tests_score", 0),
                     "note": e.note,
                 }
                 for e in res.events
@@ -354,6 +360,7 @@ def api_wyckoff(
         "bars": len(df),
         "pure_wyckoff": pure_wyckoff,
         "mode": mode,
+        "is_pro": getattr(result, "is_pro", False),
         "is_bridged": getattr(result, "is_bridged", False),
         "accumulation": acc_pack,
         "distribution": pack(result.dist, "distribution"),

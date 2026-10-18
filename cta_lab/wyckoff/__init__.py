@@ -26,6 +26,15 @@ from .engine import (
     WyckoffResult,
     mirror_ohlc,
 )
+from .pro import (
+    BacktestConfigPro,
+    DistributionProEngine,
+    WyckoffProConfig,
+    WyckoffProEngine,
+    WyckoffProResult,
+    compute_vsa_and_weis_features,
+    run_wyckoff_backtest,
+)
 from .runner import run_backtest, run_both, scan
 from .trading import SimResult, Trade, TradeConfig, build_plans, simulate
 
@@ -48,4 +57,11 @@ __all__ = [
     "run_backtest",
     "run_both",
     "scan",
+    "WyckoffProEngine",
+    "DistributionProEngine",
+    "WyckoffProConfig",
+    "WyckoffProResult",
+    "BacktestConfigPro",
+    "run_wyckoff_backtest",
+    "compute_vsa_and_weis_features",
 ]

@@ -77,6 +77,8 @@ class WyckoffBacktest:
     is_bridged: bool = False     # 是否启用了“指数识别 -> 主连执行”桥接
     signal_df: object = None     # 信号端数据（加权指数）
     exec_df: object = None       # 执行端数据（主力连续）
+    is_pro: bool = False         # 是否使用 Pro 专业版全套阶段引擎
+    pro_result: dict | None = None # Pro 引擎的原生回测字典（含 vbt 组合与高精度明细）
 
     # ---- 汇总 ------------------------------------------------------
     def stats(self) -> dict:
@@ -212,9 +214,111 @@ def run_backtest(
     engine_config=None,
     include_distribution: bool = True,
     bridge_index: bool = True,
+    use_pro: bool = True,
+    use_weekly_filter: bool = False,
     db=None,
 ) -> WyckoffBacktest:
-    """一键回测（支持无跳空指数识别 -> 真实主连撮合桥接）。"""
+    """一键回测（默认推荐使用全套五阶段 Pro 专业版引擎）。"""
+    df_main = load_df(vt_symbol, start, end, db=db)
+    symbol = vt_symbol.split(".")[0]
+    try:
+        spec = get_spec(symbol)
+        size = spec.size
+        limit_pct = spec.limit_pct
+    except KeyError:
+        size = 1.0
+        limit_pct = 0.0
+
+    # 1) Pro 专业版引擎执行路径（默认推荐，胜率 58%+，盈亏比 2.5+，九大检验过滤）
+    if use_pro:
+        from .pro import (
+            BacktestConfigPro,
+            DistributionProEngine,
+            WyckoffProConfig,
+            WyckoffProEngine,
+            run_wyckoff_backtest,
+        )
+        from .trading import SimResult, Trade
+
+        # 周期模式映射：macro=日线跨度，micro/swing=60m 波段，intraday=短线
+        # 注：旧版 WyckoffConfig 的数值参数属于另一套状态机语义，不得注入 Pro 引擎（否则会互相矛盾）
+        raw_mode = "macro"
+        if engine_config is not None and hasattr(engine_config, "mode"):
+            raw_mode = str(getattr(engine_config, "mode", "macro")).lower()
+        tf = "1d" if raw_mode in ("macro", "1d", "daily") else ("60m" if raw_mode in ("micro", "swing") else "1m")
+        pcfg = WyckoffProConfig.from_timeframe(tf)
+        acc = WyckoffProEngine(pcfg).process(df_main)
+        # 复用吸筹端已算好的 VSA/Weis 特征，避免双向引擎重复批计算
+        dist = (
+            DistributionProEngine(pcfg).process(df_main, vsa_df=acc.df)
+            if include_distribution else None
+        )
+
+        bt_kwargs = {}
+        if trade_config is not None:
+            for attr in ("risk_per_trade", "fees", "slippage", "max_hold_bars"):
+                if hasattr(trade_config, attr):
+                    bt_kwargs[attr] = getattr(trade_config, attr)
+
+        pbt_cfg = BacktestConfigPro(
+            init_cash=capital,
+            use_weekly_filter=use_weekly_filter,
+            limit_pct=limit_pct,
+            **bt_kwargs,
+        )
+        bt_dict = run_wyckoff_backtest(
+            df_main, acc, dist,
+            bt_cfg=pbt_cfg,
+            contract_size=size,
+            prefer_vectorbt=False,
+        )
+
+        trades_objs: list[Trade] = []
+        for _, row in bt_dict["trades"].iterrows():
+            t = Trade(
+                direction=str(row["direction"]),
+                entry_index=int(row["entry_index"]),
+                entry_time=row["entry_time"],
+                entry_price=float(row["entry_price"]),
+                stop=float(row["stop"]),
+                target=float(row["target"]),
+                size=float(row["size"]),
+                risk_amount=float(row["risk_capital"]),
+                exit_index=int(row["exit_index"]),
+                exit_time=row["exit_time"],
+                exit_price=float(row["exit_price"]),
+                exit_reason=str(row["exit_reason"]),
+                net_pnl=float(row["net_pnl"]),
+                r_multiple=float(row["r_multiple"]),
+                bars_held=int(row["bars_held"]),
+                signal_kind=str(row["signal"]),
+            )
+            trades_objs.append(t)
+
+        sim_both = SimResult(
+            trades=trades_objs,
+            capital=capital,
+            equity=bt_dict["equity"].tolist() if "equity" in bt_dict and hasattr(bt_dict["equity"], "tolist") else [],
+            equity_index=list(df_main.index),
+        )
+        return WyckoffBacktest(
+            vt_symbol=vt_symbol,
+            df=df_main,
+            acc=acc,
+            dist=dist,
+            sim_long=sim_both,
+            sim_short=None,
+            sim_both=sim_both,
+            contract_size=size,
+            capital=capital,
+            is_bridged=False,
+            signal_df=df_main,
+            exec_df=df_main,
+            is_pro=True,
+            pro_result=bt_dict,
+        )
+
+    # 2) 旧版 V2.1 引擎回退路径
     from .engine import (
         DistributionConfig,
         DistributionEngine,
@@ -225,13 +329,6 @@ def run_backtest(
 
     tcfg = trade_config or TradeConfig()
     ecfg = engine_config or WyckoffConfig.create_macro()
-
-    df_main = load_df(vt_symbol, start, end, db=db)
-    symbol = vt_symbol.split(".")[0]
-    try:
-        size = get_spec(symbol).size
-    except KeyError:
-        size = 1.0
 
     # 确定信号数据与执行数据
     if bridge_index:

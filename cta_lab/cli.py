@@ -286,6 +286,8 @@ def cmd_wyckoff(args) -> int:
         return 0
 
     vt = _full_symbol(args.symbol)
+    use_pro = not getattr(args, "legacy", False)
+    use_weekly_filter = getattr(args, "weekly_filter", False)
     result = wyckoff_backtest(
         vt, start=start, end=end,
         capital=args.capital,
@@ -293,6 +295,8 @@ def cmd_wyckoff(args) -> int:
         trade_config=tcfg,
         include_distribution=not args.no_dist,
         bridge_index=bridge_index,
+        use_pro=use_pro,
+        use_weekly_filter=use_weekly_filter,
     )
     print()
     print(result.summary())
@@ -450,6 +454,8 @@ def build_parser():
     p_wy.add_argument("--start", default=None, help="起始日 YYYY-MM-DD")
     p_wy.add_argument("--end", default=None, help="结束日 YYYY-MM-DD")
     p_wy.add_argument("--capital", type=int, default=1_000_000)
+    p_wy.add_argument("--legacy", action="store_true", help="使用旧版 V2.1 引擎（默认使用 Pro 专业版全套五阶段引擎）")
+    p_wy.add_argument("--weekly-filter", action="store_true", help="启用 MTF 周线宏观过滤器（顺周线大势屏蔽逆势信号，追求极致胜率）")
     p_wy.add_argument("--macro", action="store_true", default=True, help="宏观日线维科夫跨度（默认，年均1~2个大区间）")
     p_wy.add_argument("--micro", action="store_true", help="微观短线维科夫跨度（更密集识别局部小震荡）")
     p_wy.add_argument("--no-bridge", action="store_true", help="禁用指数桥接（直接在主连上识别形态）")
