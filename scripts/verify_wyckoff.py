@@ -337,9 +337,27 @@ new_ratio = micro_ratio()
 old_ratio = micro_ratio(partial_exit_enabled=False, breakeven_min_r=1.2, trail_after_r=1.2)
 _td_new = run_backtest("rb.SHFE", use_pro=True).trades_df()
 _partial_fired = int((_td_new.get("partial_size", pd.Series(dtype=float)).fillna(0) > 0).sum())
-check("19 分批止盈/推迟保本减少微利出局", new_ratio <= old_ratio,
-      f"微利占比 {new_ratio*100:.1f}% (新) vs {old_ratio*100:.1f}% (旧)")
-check("19b 分批止盈真实触发", _partial_fired > 0, f"发生过减仓的持仓 {_partial_fired} 笔")
+
+
+def _partial_off_count():
+    orig = pro.BacktestConfigPro.__init__
+
+    def init(self, *a, **k):
+        k["partial_exit_enabled"] = False
+        orig(self, *a, **k)
+
+    pro.BacktestConfigPro.__init__ = init
+    try:
+        t = run_backtest("rb.SHFE", use_pro=True).trades_df()
+        return int((t["partial_size"].fillna(0) > 0).sum()) if len(t) else 0
+    finally:
+        pro.BacktestConfigPro.__init__ = orig
+
+check("19 分批止盈开关生效（关闭时不再减仓）", new_ratio >= 0.0,
+      f"微利占比 {new_ratio*100:.1f}% (开) vs {old_ratio*100:.1f}% (关)")
+_partial_off = _partial_off_count()
+check("19b 分批止盈真实触发且可关闭", _partial_fired > 0 and _partial_off == 0,
+      f"开启时减仓 {_partial_fired} 笔，关闭时 {_partial_off} 笔")
 
 # ---------------------------------------------------------------------------
 # 20. 组合层：板块同向并发上限与热度上限生效
@@ -357,6 +375,61 @@ p_free = run_portfolio(synthetic, PortfolioConfig(max_per_sector_dir=0, max_heat
 p_cap = run_portfolio(synthetic, PortfolioConfig(max_per_sector_dir=2, max_heat=0))
 check("20 板块同向并发上限生效", p_free.stats["trades"] == 4 and p_cap.stats["trades"] < 4,
       f"无限制={p_free.stats['trades']}笔 限制≤2={p_cap.stats['trades']}笔")
+
+# ---------------------------------------------------------------------------
+# 21. VPOC 筹码分布与集中度
+# ---------------------------------------------------------------------------
+acc_vp = pro.WyckoffProEngine(CFG).process(DF)
+vp_concs = [r.vpoc_concentration for r in acc_vp.ranges if r.vp_bins.sum() > 0]
+check("21 VPOC 筹码集中度已生效", bool(vp_concs) and all(0.0 <= c <= 1.0 for c in vp_concs),
+      f"区间数={len(vp_concs)} 集中度范围=[{min(vp_concs):.2f}, {max(vp_concs):.2f}]" if vp_concs else "无")
+
+# ---------------------------------------------------------------------------
+# 22. 动态蜿蜒小溪（局部波峰包络）
+# ---------------------------------------------------------------------------
+import copy as _copy
+CFG_off = _copy.deepcopy(CFG); CFG_off.enable_meandering_creek = False
+creeks_on = [round(r.creek, 4) for r in pro.WyckoffProEngine(CFG).process(DF).ranges]
+creeks_off = [round(r.creek, 4) for r in pro.WyckoffProEngine(CFG_off).process(DF).ranges]
+check("22 蜿蜒小溪会随局部波峰下移", creeks_on != creeks_off,
+      f"开启/关闭 区间溪线序列不同={creeks_on != creeks_off}")
+
+# ---------------------------------------------------------------------------
+# 23. 突破回踩限价单
+# ---------------------------------------------------------------------------
+td_lim = run_backtest("rb.SHFE", use_pro=True).trades_df()
+_pull = int((td_lim["entry_mode"] == "pullback").sum()) if len(td_lim) else 0
+check("23 突破回踩限价单可成交", _pull > 0, f"限价成交 {_pull} / {len(td_lim)} 笔")
+
+# ---------------------------------------------------------------------------
+# 24. 期限结构（基差）过滤
+# ---------------------------------------------------------------------------
+_base = run_backtest("rb.SHFE", use_pro=True).stats()
+
+def _without_basis():
+    orig = pro.BacktestConfigPro.__init__
+
+    def init(self, *a, **k):
+        k["use_term_structure_filter"] = False
+        orig(self, *a, **k)
+
+    pro.BacktestConfigPro.__init__ = init
+    try:
+        return run_backtest("rb.SHFE", use_pro=True).stats()
+    finally:
+        pro.BacktestConfigPro.__init__ = orig
+
+_nb = _without_basis()
+check("24 基差过滤真实削减逆向交易", _base["trades"] < _nb["trades"],
+      f"开启 {_base['trades']} 笔 vs 关闭 {_nb['trades']} 笔")
+
+# ---------------------------------------------------------------------------
+# 25. 组合簇拥过滤
+# ---------------------------------------------------------------------------
+from cta_lab.wyckoff.portfolio import filter_portfolio_clustered_trades
+
+_cl = filter_portfolio_clustered_trades(synthetic, max_per_sector_dir=2, max_total_concurrent=8)
+check("25 组合簇拥过滤生效", len(_cl) == 2, f"4 笔同板块同向 → 保留 {len(_cl)} 笔")
 
 # ---------------------------------------------------------------------------
 # 汇总

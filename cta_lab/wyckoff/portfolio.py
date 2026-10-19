@@ -167,3 +167,42 @@ def run_portfolio(trades: pd.DataFrame, cfg: PortfolioConfig | None = None) -> P
     }
     taken_df = pd.DataFrame(taken).drop(columns=["risk_amount"], errors="ignore")
     return PortfolioResult(daily, taken_df, skipped, stats)
+
+
+def filter_portfolio_clustered_trades(
+    trades_df: pd.DataFrame,
+    max_per_sector_dir: int = 2,
+    max_total_concurrent: int = 8,
+) -> pd.DataFrame:
+    """轻量级组合簇拥过滤（不做资金曲线，只筛交易）。
+
+    按入场时间顺序扫描候选交易，限制同一时刻：
+    1. 同一板块、同一方向的在途持仓数不超过 ``max_per_sector_dir``；
+    2. 全市场总并发不超过 ``max_total_concurrent``。
+
+    用于快速评估"如果加了板块并发约束，还剩多少可交易机会"，
+    完整资金曲线请用 :func:`run_portfolio`。
+    """
+    if trades_df is None or trades_df.empty:
+        return pd.DataFrame() if trades_df is None else trades_df.copy()
+
+    df_sorted = trades_df.sort_values("entry_time", kind="stable").reset_index(drop=True)
+    accepted: list[int] = []
+    active: list[dict] = []
+
+    for idx, row in df_sorted.iterrows():
+        entry_t = pd.to_datetime(row["entry_time"])
+        exit_t = pd.to_datetime(row["exit_time"])
+        sec = str(row.get("sector") or sector_of(str(row.get("symbol", ""))))
+        direction = str(row.get("direction", "long"))
+
+        active = [a for a in active if a["exit_time"] > entry_t]
+        if len(active) >= max_total_concurrent:
+            continue
+        if sum(1 for a in active if a["sector"] == sec and a["direction"] == direction) >= max_per_sector_dir:
+            continue
+
+        accepted.append(idx)
+        active.append({"exit_time": exit_t, "sector": sec, "direction": direction})
+
+    return df_sorted.iloc[accepted].reset_index(drop=True)

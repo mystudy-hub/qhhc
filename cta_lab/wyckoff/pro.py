@@ -141,11 +141,38 @@ class TradingRange:
     up_wave_vol: float = 0.0           # 区间内已完结上涨波段累计成交量（David Weis Wave Demand）
     down_wave_vol: float = 0.0         # 区间内已完结下跌波段累计成交量（David Weis Wave Supply）
     higher_lows_count: int = 0
+    swing_highs: list[float] = field(default_factory=list)   # Phase B 局部波峰序列（构建蜿蜒小溪）
+    vp_bins: np.ndarray = field(default_factory=lambda: np.zeros(12, dtype=float))  # 区间 12 分位筹码分布 (Volume Profile)
     events: list[WyckoffEvent] = field(default_factory=list)
 
     @property
     def width(self) -> float:
         return abs(self.creek - self.ice)
+
+    @property
+    def vpoc_concentration(self) -> float:
+        """区间内筹码峰（VPOC 及其相邻分位）的成交量集中度 ∈ [0, 1]。
+
+        均匀分布约 0.25；主力在狭窄价格带反复换手建仓时会显著抬升。
+        """
+        total_v = float(self.vp_bins.sum())
+        if total_v <= 1e-9:
+            return 0.25
+        pk = int(np.argmax(self.vp_bins))
+        lo = max(0, pk - 1)
+        hi = min(len(self.vp_bins), pk + 2)
+        return float(self.vp_bins[lo:hi].sum() / total_v)
+
+    def update_volume_profile(self, typical_price: float, volume: float) -> None:
+        """将当根 K 线成交量增量归入区间 12 分位价格桶（零未来函数）。"""
+        anchor_hi = max(self.climax_high, self.creek)
+        anchor_lo = self.ice
+        span = anchor_hi - anchor_lo
+        if span <= 1e-9 or volume <= 0:
+            return
+        rel = (typical_price - anchor_lo) / span
+        idx = int(np.clip(np.floor(rel * len(self.vp_bins)), 0, len(self.vp_bins) - 1))
+        self.vp_bins[idx] += volume
 
     def as_dict(self) -> dict:
         return {
@@ -162,6 +189,7 @@ class TradingRange:
             "end_reason": self.end_reason,
             "up_wave_vol": float(self.up_wave_vol),
             "down_wave_vol": float(self.down_wave_vol),
+            "vpoc_conc": round(float(self.vpoc_concentration), 3),
             "events": [e.as_dict() for e in self.events],
         }
 
@@ -192,6 +220,8 @@ class WyckoffProConfig:
     fti_vol_floor: float = 0.9         # FTI 破冰量能下限（相对于 20 均量）
     min_nine_tests_score: int = 4      # 诊断分最低要求（仅作辅助过滤；分项权重未做拟合，阈值不宜过高）
     min_structural_rr: float = 1.2     # 跨品种稳健硬门禁：结构盈亏空间（0 为关闭）
+    enable_meandering_creek: bool = True  # Phase B 局部波峰包络动态蜿蜒小溪（波动率收缩吸收）
+    enable_vpoc_weight: bool = True    # 因果能量中纳入 VPOC 筹码峰集中度修正
     stop_atr_buffer: float = 0.6       # 结构止损外侧 ATR 缓冲
     base_target_r: float = 2.5         # 基础目标盈亏比（根据 Phase B 因果累积动态放大）
     warmup: int = 55
@@ -665,6 +695,7 @@ class WyckoffProEngine:
 
         if self._tr is not None:
             self._tr.cause_volume_sum += volume
+            self._tr.update_volume_profile((high + low + close) / 3.0, volume)
 
             if (i - self._tr.start_index) > cfg.max_tr_bars:
                 self._close_range(i, "TR_TIMEOUT")
@@ -820,6 +851,25 @@ class WyckoffProEngine:
             tr = self._tr
             assert tr is not None
             cause_bars = i - self._b_start
+
+            # 动态蜿蜒小溪线（Meandering Creek）：识别 Phase B 内的局部波峰，允许收敛三角/下降模形上沿平滑下移
+            if cfg.enable_meandering_creek and len(self._highs) >= 4 and cause_bars >= 4:
+                highs_q = list(self._highs)
+                prev_h = highs_q[-2]
+                mid_line = 0.5 * (tr.climax_high + tr.ice)
+                if (
+                    prev_h >= highs_q[-3]
+                    and prev_h > high
+                    and prev_h >= mid_line
+                    and prev_h <= tr.climax_high + 0.2 * atr
+                ):
+                    if not tr.swing_highs or abs(prev_h - tr.swing_highs[-1]) >= 0.15 * atr:
+                        tr.swing_highs.append(prev_h)
+                        if len(tr.swing_highs) >= 2:
+                            recent_peaks_avg = 0.5 * (tr.swing_highs[-1] + tr.swing_highs[-2])
+                            # 下限不得低于区间高度的 65%，防止小溪塔陷到中轴以下
+                            floor_creek = tr.ice + max(2.2 * atr, 0.65 * (tr.climax_high - tr.ice))
+                            tr.creek = max(floor_creek, 0.55 * tr.creek + 0.45 * recent_peaks_avg)
 
             if high > tr.creek + 0.15 * atr and close < tr.creek and close_pos <= 0.45:
                 tr.creek = 0.7 * tr.creek + 0.3 * high
@@ -1052,11 +1102,21 @@ class WyckoffProEngine:
         return 0, 0
 
     def _cause_energy(self, tr: TradingRange, atr: float, cause_bars: int) -> float:
-        """点数图水平计数（Point & Figure Horizontal Count）因果能量：区间宽度 × 蓄势时长 × 波段量能倾斜。"""
+        """点数图水平计数因果能量：区间宽度 × 蓄势时长 × 波段量能倾斜 × VPOC 筹码集中度修正。
+
+        波段量能纳入**当前在途波段**（``_weis_tr_cum_vol``），消除仅在 1.2ATR 反转完结时才计入的滞后盲区；
+        VPOC 修正：均匀分布约 0.28，筹码峰越集中（主力在窄带密集换手建仓）因果能量越强，封顶 1.15x。
+        """
         tr_width = max(tr.width, 2.0 * atr)
         cause_ratio = float(np.clip(cause_bars / max(self.cfg.min_cause_bars, 1), 0.8, 3.0))
-        wave_ratio = float(np.clip((tr.up_wave_vol / max(tr.down_wave_vol, 1.0)) ** 0.5, 0.85, 2.2))
-        return tr_width * cause_ratio * wave_ratio
+        live_up = tr.up_wave_vol + (self._weis_tr_cum_vol if self._weis_dir == 1 else 0.0)
+        live_dn = tr.down_wave_vol + (self._weis_tr_cum_vol if self._weis_dir == -1 else 0.0)
+        wave_ratio = float(np.clip((max(live_up, 1.0) / max(live_dn, 1.0)) ** 0.5, 0.85, 2.2))
+        vpoc_mult = (
+            float(np.clip(1.0 + 0.5 * (tr.vpoc_concentration - 0.28), 0.95, 1.15))
+            if self.cfg.enable_vpoc_weight else 1.0
+        )
+        return tr_width * cause_ratio * wave_ratio * vpoc_mult
 
     def _structural_projection(
         self, tr: TradingRange, atr: float, cause_bars: int, mult: float = 0.95
@@ -1444,6 +1504,10 @@ class BacktestConfigPro:
     partial_exit_frac: float = 0.4     # 减仓比例（按当前整手取整）
     allow_short: bool = True
     use_weekly_filter: bool = False    # MTF 周线大背景过滤：三品种实测均为负向（avgR 全面下降），故默认关闭
+    pullback_entry_for_breakout: bool = True   # 突破信号遇大幅高开改用回调限价挂单（80 品种实测 avgR +0.0074）
+    pullback_wait_bars: int = 3        # 回调限价挂单最大等待根数
+    use_term_structure_filter: bool = True     # 期限结构（主连-指数基差）过滤：贴水不追空、升水不追多（80 品种实测主获益项）
+    basis_filter_thresh: float = 0.035 # 升贴水过滤阈值
     limit_pct: float = 0.05            # 涨跌停幅度（0 表示禁用封板保护），用于入场/出场流动性枯竭检测
     trade_kinds: tuple[str, ...] = ("SPRING3", "TEST", "LPS", "FTI", "JAC", "SOS")
 
@@ -1513,6 +1577,33 @@ def run_wyckoff_backtest(
 
     n = len(df)
 
+    # 执行端价格与 ATR（严格因果，排除当根）
+    opens = df["open"].to_numpy(dtype=float)
+    highs = df["high"].to_numpy(dtype=float)
+    lows = df["low"].to_numpy(dtype=float)
+    closes = df["close"].to_numpy(dtype=float)
+    atrs = _exclusive_atr(df)
+    # 信号端收盘价（用于把事件止损/目标按点位距离平移回执行空间）
+    sig_df = signal_df if signal_df is not None else df
+    sig_closes = sig_df["close"].to_numpy(dtype=float)
+    is_bridged = sig_df is not df
+    # 严格因果：入场与移动止损均使用“截至前一根”的 ATR，杜绝当根高低价提前泄入
+    atrs_prev = np.empty_like(atrs)
+    atrs_prev[0] = atrs[0]
+    atrs_prev[1:] = atrs[:-1]
+    idx_arr = df.index
+
+    def _map_levels(ev: WyckoffEvent, fill_price: float) -> tuple[float, float]:
+        """把信号空间的 stop/target 按点位距离平移回执行空间（桥接时必需）。"""
+        stop_sig = float(ev.stop)
+        target_sig = float(ev.target)
+        if is_bridged and stop_sig > 0 and target_sig > 0 and ev.index < len(sig_closes):
+            sc = float(sig_closes[ev.index])
+            if ev.direction == "long":
+                return fill_price - (sc - stop_sig), fill_price + (target_sig - sc)
+            return fill_price + (stop_sig - sc), fill_price - (sc - target_sig)
+        return stop_sig, target_sig
+
     macro_trend = compute_weekly_macro_trend(df) if cfg.use_weekly_filter else None
 
     valid_plans: dict[int, list[WyckoffEvent]] = {}
@@ -1531,6 +1622,14 @@ def run_wyckoff_backtest(
         entry_bar = ev.index + 1
         if entry_bar >= n:
             continue
+        # 期限结构（主连-指数基差率）过滤：深度贴水不追空，深度升水不追高突破
+        if is_bridged and cfg.use_term_structure_filter and ev.index < len(sig_closes):
+            sig_c = max(float(sig_closes[ev.index]), 1e-9)
+            basis_pct = (float(closes[ev.index]) - sig_c) / sig_c
+            if ev.direction == "short" and basis_pct <= -cfg.basis_filter_thresh:
+                continue
+            if ev.direction == "long" and ev.kind in ("JAC", "SOS") and basis_pct >= cfg.basis_filter_thresh:
+                continue
         valid_plans.setdefault(entry_bar, []).append(ev)
 
     # 注：原 vectorbt 分支已移除——它只能传固定 sl_stop/tp_stop 百分比，与结构止损矛盾，
@@ -1538,22 +1637,8 @@ def run_wyckoff_backtest(
     vbt_stats = None
     vbt_portfolio = None
 
-    # 高精度结构止损 + 金字塔加仓模拟（修复原版入场当根漏检止损与跳空穿仓 Bug）
-    opens = df["open"].to_numpy(dtype=float)
-    highs = df["high"].to_numpy(dtype=float)
-    lows = df["low"].to_numpy(dtype=float)
-    closes = df["close"].to_numpy(dtype=float)
-    # 执行端 ATR（严格因果，排除当根）
-    atrs = _exclusive_atr(df)
-    # 信号端收盘价（用于把事件止损/目标按点位距离平移回执行空间）
-    sig_df = signal_df if signal_df is not None else df
-    sig_closes = sig_df["close"].to_numpy(dtype=float)
-    is_bridged = sig_df is not df
-    # 严格因果：入场与移动止损均使用“截至前一根”的 ATR，杜绝当根高低价提前泄入
-    atrs_prev = np.empty_like(atrs)
-    atrs_prev[0] = atrs[0]
-    atrs_prev[1:] = atrs[:-1]
-    idx_arr = df.index
+    # 高精度结构止损 + 金字塔加仓模拟（价格/ATR 数组已在函数开头统一提取）
+    pending_limits: list[dict] = []   # 突破信号的回踩限价挂单池
 
     # 相位驱动止损棘轮所需：每个交易区间的首次突破确认（SOS/JAC）位置
     breakout_idx: dict[int, int] = {}
@@ -1591,6 +1676,65 @@ def run_wyckoff_backtest(
                     remaining_pos.append(pos)
             open_positions = remaining_pos
 
+        # Step B0: 处理回踩限价挂单池（突破信号的 Pullback Limit Orders）
+        if pending_limits:
+            still_pending: list[dict] = []
+            for lim in pending_limits:
+                if i - lim["created_bar"] > cfg.pullback_wait_bars:
+                    continue                                  # 超时作废
+                if len(open_positions) >= cfg.max_concurrent_positions:
+                    still_pending.append(lim)
+                    continue
+                ev = lim["event"]
+                lim_p = float(lim["limit_price"])
+                # 挂单成交判定：多头需当日最低价触及限价，空头需最高价触及
+                triggered = (lows[i] <= lim_p) if ev.direction == "long" else (highs[i] >= lim_p)
+                if not triggered:
+                    still_pending.append(lim)
+                    continue
+                # 限价单成交价：不劣于限价（跳空优于限价时按开盘价成交）
+                if ev.direction == "long":
+                    fill_p = min(opens[i], lim_p) * (1.0 + cfg.slippage * 0.5)
+                else:
+                    fill_p = max(opens[i], lim_p) * (1.0 - cfg.slippage * 0.5)
+                stop, target = _map_levels(ev, fill_p)
+                ok_gap = (fill_p > stop) if ev.direction == "long" else (fill_p < stop)
+                if not ok_gap:
+                    still_pending.append(lim)
+                    continue
+                risk_per_unit = max(abs(fill_p - stop), 0.2 * atrs_prev[i])
+                pyr_scale = 0.75 if open_positions else 1.0
+                risk_capital = balance * cfg.risk_per_trade * pyr_scale
+                raw_size = min(
+                    risk_capital / max(risk_per_unit * contract_size, 1e-9),
+                    (balance * 2.5) / max(fill_p * contract_size, 1e-9),
+                )
+                lots = float(int(raw_size))
+                if lots < 1.0:
+                    continue
+                open_positions.append({
+                    "tr_id": ev.tr_id,
+                    "signal": ev.name,
+                    "signal_kind": ev.kind,
+                    "regime": ev.regime,
+                    "direction": ev.direction,
+                    "nine_tests": ev.nine_tests_score,
+                    "entry_index": i,
+                    "entry_time": str(idx_arr[i])[:19],
+                    "entry_price": round(fill_p, 4),
+                    "stop": round(stop, 4),
+                    "trail_stop": stop,
+                    "target": round(target, 4),
+                    "size": lots,
+                    "risk_capital": lots * risk_per_unit * contract_size,
+                    "peak_r": 0.0,
+                    "partial_done": False,
+                    "partial_pnl": 0.0,
+                    "partial_size": 0.0,
+                    "entry_mode": "pullback",
+                })
+            pending_limits = still_pending
+
         # Step B: 处理 bar i 的新开仓或金字塔加仓（TEST 底仓 -> LPS 浮盈加仓）
         if i in valid_plans and len(open_positions) < cfg.max_concurrent_positions:
             for ev in valid_plans[i]:
@@ -1606,6 +1750,23 @@ def run_wyckoff_backtest(
                     ev.direction == "short" and is_limit_down_bar
                 ):
                     continue
+
+                # 突破信号（JAC/SOS）遇大幅高开时改挂回调限价单，避免在情绪高点追入
+                if cfg.pullback_entry_for_breakout and ev.kind in ("JAC", "SOS") and i > 0:
+                    prev_c = closes[i - 1]
+                    prev_mid = 0.5 * (highs[i - 1] + lows[i - 1])
+                    if ev.direction == "long" and (raw_open - prev_c) > 0.35 * atrs_prev[i]:
+                        pending_limits.append({
+                            "event": ev, "created_bar": i,
+                            "limit_price": max(prev_mid, prev_c - 0.35 * atrs_prev[i]),
+                        })
+                        continue
+                    if ev.direction == "short" and (prev_c - raw_open) > 0.35 * atrs_prev[i]:
+                        pending_limits.append({
+                            "event": ev, "created_bar": i,
+                            "limit_price": min(prev_mid, prev_c + 0.35 * atrs_prev[i]),
+                        })
+                        continue
 
                 fill_open = raw_open * (1.0 + cfg.slippage) if ev.direction == "long" else raw_open * (1.0 - cfg.slippage)
 
@@ -1631,19 +1792,7 @@ def run_wyckoff_backtest(
                         else:
                             base_p["trail_stop"] = min(base_p["trail_stop"], base_p["entry_price"] * 0.999)
 
-                stop_sig = float(ev.stop)
-                target_sig = float(ev.target)
-                if is_bridged and stop_sig > 0 and target_sig > 0 and ev.index < len(sig_closes):
-                    # 指数空间 → 主连空间：保留结构与入场价之间的点位距离
-                    sc = float(sig_closes[ev.index])
-                    if ev.direction == "long":
-                        stop = fill_open - (sc - stop_sig)
-                        target = fill_open + (target_sig - sc)
-                    else:
-                        stop = fill_open + (stop_sig - sc)
-                        target = fill_open - (sc - target_sig)
-                else:
-                    stop, target = stop_sig, target_sig
+                stop, target = _map_levels(ev, fill_open)
                 valid_gap = (fill_open > stop) if ev.direction == "long" else (fill_open < stop)
                 if not valid_gap:
                     continue
@@ -1688,6 +1837,7 @@ def run_wyckoff_backtest(
                     "partial_done": False,
                     "partial_pnl": 0.0,
                     "partial_size": 0.0,
+                    "entry_mode": "market",
                 })
 
         # Step C: 检查所有当前持仓（含当根新开仓）在 bar i 的止损/止盈/移动止损

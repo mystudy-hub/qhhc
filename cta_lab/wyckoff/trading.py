@@ -76,6 +76,7 @@ class Trade:
     tr_id: int = -1
     signal_kind: str = ""
     partial_size: float = 0.0        # 分批止盈已减仓手数（0 表示未触发）
+    entry_mode: str = "market"       # 入场方式：market=信号次根市价，pullback=回踩限价成交
     is_cross_asset: bool = False
 
     @property
@@ -103,6 +104,7 @@ class Trade:
             "tr_id": self.tr_id,
             "signal": self.signal_kind,
             "partial_size": round(self.partial_size, 4),
+            "entry_mode": self.entry_mode,
         }
 
 

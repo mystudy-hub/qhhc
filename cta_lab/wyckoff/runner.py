@@ -341,6 +341,7 @@ def run_backtest(
                 bars_held=int(row["bars_held"]),
                 signal_kind=str(row["signal"]),
                 partial_size=float(row.get("partial_size", 0.0) or 0.0),
+                entry_mode=str(row.get("entry_mode", "market") or "market"),
             )
             trades_objs.append(t)
 
