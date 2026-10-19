@@ -61,6 +61,34 @@ def load_df(
     return df
 
 
+def _pro_trade_kinds(signals) -> tuple[str, ...]:
+    """把旧版 `TradeConfig.trade_signals`（事件展示名）展开为 Pro 引擎的 kind 集合。
+
+    旧引擎与 Pro 引擎事件命名不同（旧：TEST/LPS/FTI；Pro：SPRING3/TEST/LPS/JAC/SOS/FTI），
+    若不显式映射，CLI/Web 上的「纯核心 / 禁空」控制会被静默丢弃。
+    """
+    alias: dict[str, tuple[str, ...]] = {
+        "SPRING3": ("SPRING3",),
+        "SPRING": ("SPRING3",),
+        "UTAD_#3": ("SPRING3",),
+        "TEST": ("TEST",),
+        "TEST_SELL": ("TEST",),
+        "LPS": ("LPS",),
+        "LPSY": ("LPS",),
+        "BUEC": ("LPS",),
+        "JAC": ("JAC",),
+        "SOS": ("SOS",),
+        "FTI": ("FTI",),
+        "JAC_BREAKOUT": ("FTI",),
+    }
+    out: list[str] = []
+    for s in signals or ():
+        for k in alias.get(str(s).upper(), ()):
+            if k not in out:
+                out.append(k)
+    return tuple(out)
+
+
 @dataclass
 class WyckoffBacktest:
     """一次完整回测的结果。"""
@@ -247,18 +275,37 @@ def run_backtest(
             raw_mode = str(getattr(engine_config, "mode", "macro")).lower()
         tf = "1d" if raw_mode in ("macro", "1d", "daily") else ("60m" if raw_mode in ("micro", "swing") else "1m")
         pcfg = WyckoffProConfig.from_timeframe(tf)
-        acc = WyckoffProEngine(pcfg).process(df_main)
+        # 结构识别用无跳空平滑指数，成交仍在主连真实价格上（换月缺口不得污染冰线/小溪与信号）
+        signal_df = (
+            load_index_or_synthetic(vt_symbol, df_main, start, end, db=db)
+            if bridge_index
+            else df_main
+        )
+        if len(signal_df) != len(df_main) or not signal_df.index.equals(df_main.index):
+            signal_df = signal_df.reindex(df_main.index).ffill().bfill()
+        acc = WyckoffProEngine(pcfg).process(signal_df)
         # 复用吸筹端已算好的 VSA/Weis 特征，避免双向引擎重复批计算
         dist = (
-            DistributionProEngine(pcfg).process(df_main, vsa_df=acc.df)
+            DistributionProEngine(pcfg).process(signal_df, vsa_df=acc.df)
             if include_distribution else None
         )
 
         bt_kwargs = {}
         if trade_config is not None:
-            for attr in ("risk_per_trade", "fees", "slippage", "max_hold_bars"):
-                if hasattr(trade_config, attr):
-                    bt_kwargs[attr] = getattr(trade_config, attr)
+            # TradeConfig 与 BacktestConfigPro 字段名不同，必须显式映射（否则参数被静默丢弃）
+            for src, dst in (
+                ("risk_per_trade", "risk_per_trade"),
+                ("commission_rate", "fees"),
+                ("slippage_pct", "slippage"),
+                ("max_hold_bars", "max_hold_bars"),
+                ("allow_short", "allow_short"),
+            ):
+                if hasattr(trade_config, src):
+                    bt_kwargs[dst] = getattr(trade_config, src)
+            if hasattr(trade_config, "trade_signals"):
+                kinds = _pro_trade_kinds(getattr(trade_config, "trade_signals"))
+                if kinds:
+                    bt_kwargs["trade_kinds"] = kinds
 
         pbt_cfg = BacktestConfigPro(
             init_cash=capital,
@@ -271,6 +318,7 @@ def run_backtest(
             bt_cfg=pbt_cfg,
             contract_size=size,
             prefer_vectorbt=False,
+            signal_df=signal_df if bridge_index else None,
         )
 
         trades_objs: list[Trade] = []
@@ -292,6 +340,7 @@ def run_backtest(
                 r_multiple=float(row["r_multiple"]),
                 bars_held=int(row["bars_held"]),
                 signal_kind=str(row["signal"]),
+                partial_size=float(row.get("partial_size", 0.0) or 0.0),
             )
             trades_objs.append(t)
 
@@ -311,8 +360,8 @@ def run_backtest(
             sim_both=sim_both,
             contract_size=size,
             capital=capital,
-            is_bridged=False,
-            signal_df=df_main,
+            is_bridged=bridge_index,
+            signal_df=signal_df,
             exec_df=df_main,
             is_pro=True,
             pro_result=bt_dict,

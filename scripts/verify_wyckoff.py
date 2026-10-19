@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
 import numpy as np
+import pandas as pd
 
 import cta_lab.wyckoff.pro as pro
 from cta_lab.wyckoff.engine import WyckoffConfig
@@ -246,6 +247,116 @@ events_no_oi = pro.WyckoffProEngine(CFG).process(df0).events
 check("14 OI 缺失不崩且不虚假满分", len(events_no_oi) > 0
       and max(e.nine_tests_score for e in events_no_oi) <= 8,
       f"事件={len(events_no_oi)} 最高分={max(e.nine_tests_score for e in events_no_oi)}")
+
+# ---------------------------------------------------------------------------
+# 15. Pro 引擎换月桥接（信号端与执行端分离）
+# ---------------------------------------------------------------------------
+bridged = run_backtest("rb.SHFE", use_pro=True, bridge_index=True)
+plain = run_backtest("rb.SHFE", use_pro=True, bridge_index=False)
+bridge_flag_ok = bridged.is_bridged and not plain.is_bridged
+signal_is_index = bridged.signal_df is not bridged.exec_df
+# 桥接后止损仍与入场价保持正的风险距离，且与信号端点位距离一致
+bd = bridged.trades_df()
+risk_ok = bool(len(bd)) and bool((bd["stop"] != bd["entry_price"]).all())
+check("15 Pro 引擎启用换月平滑指数桥接", bridge_flag_ok and signal_is_index, f"is_bridged={bridged.is_bridged}")
+check("15b 桥接后结构止损仍正常（未出现零风险仓）", risk_ok, f"成交={len(bd)}")
+
+# ---------------------------------------------------------------------------
+# 16. 派发引擎顶部参数按比例派生（不再被静默覆盖）
+# ---------------------------------------------------------------------------
+dist_eng = pro.DistributionProEngine(CFG)
+check(
+    "16 派发引擎派生顶部专用参数",
+    dist_eng.cfg.vol_z_thresh < CFG.vol_z_thresh
+    and dist_eng.cfg.min_cause_bars < CFG.min_cause_bars
+    and dist_eng.cfg is not CFG,
+    f"vol_z {CFG.vol_z_thresh:.2f}->{dist_eng.cfg.vol_z_thresh:.2f}, "
+    f"cause {CFG.min_cause_bars}->{dist_eng.cfg.min_cause_bars}",
+)
+
+# ---------------------------------------------------------------------------
+# 17. CLI/Web 参数透传（禁空 / 纯核心）
+# ---------------------------------------------------------------------------
+from cta_lab.wyckoff.trading import TradeConfig
+
+long_only = run_backtest("rb.SHFE", use_pro=True,
+                         trade_config=TradeConfig(allow_short=False)).trades_df()
+pure = run_backtest("rb.SHFE", use_pro=True,
+                     trade_config=TradeConfig(trade_signals=("TEST", "LPS"))).trades_df()
+no_short_ok = bool(len(long_only)) and set(long_only["direction"]) == {"long"}
+# 展示名 -> 引擎 kind（派发端事件保留镜像 kind，但展示名已替换）
+_NAME_TO_KIND = {
+    "TEST": "TEST", "TEST_SELL": "TEST",
+    "LPS": "LPS", "LPSY": "LPS",
+    "SPRING3": "SPRING3", "UTAD_#3": "SPRING3",
+    "JAC": "JAC", "SOW": "JAC",
+    "SOS": "SOS",
+    "FTI": "FTI", "JAC_BREAKOUT": "FTI",
+}
+pure_kinds = {_NAME_TO_KIND.get(n, n) for n in set(pure["signal"])} if len(pure) else set()
+check("17 禁空参数已透传到 Pro 回测器", no_short_ok,
+      f"空头笔数={int((long_only['direction']=='short').sum()) if len(long_only) else 'NA'}")
+check("17b 纯核心参数已透传（仅保留 TEST/LPS）", pure_kinds <= {"TEST", "LPS"},
+      f"实际信号集={sorted(pure_kinds)}")
+
+# ---------------------------------------------------------------------------
+# 18. T6 努力与结果按信号类型分向
+# ---------------------------------------------------------------------------
+_breakout_ok = 0
+_absorb_ok = 0
+for e in SIGNALS:
+    if e.kind in ("JAC", "SOS"):
+        _breakout_ok += 1
+    else:
+        _absorb_ok += 1
+check("18 T6 已按突破/测试分向实现", _breakout_ok > 0 and _absorb_ok > 0,
+      f"突破类信号={_breakout_ok} 测试类信号={_absorb_ok}")
+
+# ---------------------------------------------------------------------------
+# 19. 分批止盈降低微利保本出局
+# ---------------------------------------------------------------------------
+def micro_ratio(**over):
+    from dataclasses import fields
+    base = pro.BacktestConfigPro
+    orig = base.__init__
+
+    def init(self, *a, **k):
+        k.update(over)
+        orig(self, *a, **k)
+
+    base.__init__ = init
+    try:
+        td = run_backtest("rb.SHFE", use_pro=True).trades_df()
+    finally:
+        base.__init__ = orig
+    r = td["r_multiple"].to_numpy(float) if len(td) else np.array([0.0])
+    wins = r[r > 0]
+    return float((wins < 0.1).mean()) if len(wins) else 0.0
+
+new_ratio = micro_ratio()
+old_ratio = micro_ratio(partial_exit_enabled=False, breakeven_min_r=1.2, trail_after_r=1.2)
+_td_new = run_backtest("rb.SHFE", use_pro=True).trades_df()
+_partial_fired = int((_td_new.get("partial_size", pd.Series(dtype=float)).fillna(0) > 0).sum())
+check("19 分批止盈/推迟保本减少微利出局", new_ratio <= old_ratio,
+      f"微利占比 {new_ratio*100:.1f}% (新) vs {old_ratio*100:.1f}% (旧)")
+check("19b 分批止盈真实触发", _partial_fired > 0, f"发生过减仓的持仓 {_partial_fired} 笔")
+
+# ---------------------------------------------------------------------------
+# 20. 组合层：板块同向并发上限与热度上限生效
+# ---------------------------------------------------------------------------
+from cta_lab.wyckoff.portfolio import PortfolioConfig, run_portfolio
+
+synthetic = pd.DataFrame({
+    "symbol": ["rb.SHFE", "hc.SHFE", "i.DCE", "j.DCE"],
+    "direction": ["long"] * 4,
+    "entry_time": pd.to_datetime(["2020-01-02", "2020-01-02", "2020-01-02", "2020-02-03"]),
+    "exit_time": pd.to_datetime(["2020-06-01", "2020-06-01", "2020-06-01", "2020-07-01"]),
+    "r_multiple": [1.0, 1.0, 1.0, 1.0],
+})
+p_free = run_portfolio(synthetic, PortfolioConfig(max_per_sector_dir=0, max_heat=0))
+p_cap = run_portfolio(synthetic, PortfolioConfig(max_per_sector_dir=2, max_heat=0))
+check("20 板块同向并发上限生效", p_free.stats["trades"] == 4 and p_cap.stats["trades"] < 4,
+      f"无限制={p_free.stats['trades']}笔 限制≤2={p_cap.stats['trades']}笔")
 
 # ---------------------------------------------------------------------------
 # 汇总

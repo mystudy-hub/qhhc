@@ -255,7 +255,11 @@ def cmd_wyckoff(args) -> int:
             min_cause_bars=args.min_cause,
             max_spring_bars=args.spring_bars,
         )
-    signals = ("TEST", "LPS") if args.pure_wyckoff else ("TEST", "LPS", "FTI")
+    signals = (
+        ("SPRING3", "TEST", "LPS")
+        if args.pure_wyckoff
+        else ("SPRING3", "TEST", "LPS", "JAC", "SOS", "FTI")
+    )
     tcfg = TradeConfig(
         risk_per_trade=args.risk,
         target_r=args.target_r,

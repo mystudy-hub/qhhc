@@ -75,6 +75,7 @@ class Trade:
     bars_held: int = 0
     tr_id: int = -1
     signal_kind: str = ""
+    partial_size: float = 0.0        # 分批止盈已减仓手数（0 表示未触发）
     is_cross_asset: bool = False
 
     @property
@@ -101,6 +102,7 @@ class Trade:
             "bars_held": self.bars_held,
             "tr_id": self.tr_id,
             "signal": self.signal_kind,
+            "partial_size": round(self.partial_size, 4),
         }
 
 

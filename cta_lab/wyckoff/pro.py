@@ -550,12 +550,20 @@ class WyckoffProEngine:
         if len(dn_waves) >= 4 and np.mean(dn_waves[-2:]) <= 0.9 * np.mean(dn_waves[:-2]):
             score += 1
 
-        # T6 努力与结果吸收：当日成交/振幅比显著高于常态（可失败）
-        if self._trs and self._vols:
-            er = self._vols[-1] / (self._trs[-1] + 1e-9)
+        # T6 努力与结果（Effort vs. Result）—— 按信号类型分向，避免语义反转：
+        #   测试类（SPRING3/TEST/LPS 等）：高成交 + 窄幅 = 主力限价吸收（放量不跌）
+        #   突破类（SOS/JAC）：必须“努力=结果”= 放量 + 宽幅长阳；若放量却窄幅则是上方供给沉重的
+        #   派发/滞涨（Churning），不加分。口径统一用 spread（high-low）/ ATR，与 VSA 一致。
+        if self._vols:
             vol_ma, _ = self._vol_stats()
-            if er >= (vol_ma / (atr + 1e-9)) * 1.35:
-                score += 1
+            rel_vol = self._vols[-1] / max(vol_ma, 1e-9)
+            spread_ratio = (high - low) / max(atr, 1e-9)
+            if signal_kind in ("JAC", "SOS"):
+                if rel_vol >= 1.10 and spread_ratio >= 1.20:
+                    score += 1
+            else:
+                if rel_vol >= 1.05 and spread_ratio <= 1.00:
+                    score += 1
 
         # T7 持仓扩张：近 5 根持仓量净增（主力在区间内持续建仓的“资金承诺”；OI 缺失时不得分）
         if self.cfg.use_oi_confirm and oi_available and len(self._ois) >= 6:
@@ -645,6 +653,8 @@ class WyckoffProEngine:
         oi_ma = self._oi_ma()
         oi_available = bool(oi_ma > 1.0 and open_interest > 1.0)
         oi_rising = bool(oi_available and (open_interest > oi_ma * 1.003))
+        # 持仓量下降：期货下跌常由多头砍仓踩踏驱动（Long Liquidation），不能只认新空增仓
+        oi_falling = bool(oi_available and (open_interest < oi_ma * 0.997))
 
         spread = max(high - low, 1e-9)
         close_pos = (close - low) / spread
@@ -863,7 +873,7 @@ class WyckoffProEngine:
                 and close > tr.creek + 0.25 * atr
                 and close_pos >= 0.60
                 and vol_z >= 0.7
-                and (not cfg.use_oi_confirm or (oi_available and oi_rising) or vol_z >= 1.3)
+                and (not cfg.use_oi_confirm or (oi_available and (oi_rising or oi_falling)) or vol_z >= 1.3)
             ):
                 tr.phase = "PHASE_D"
                 tr.sos_index = i
@@ -976,7 +986,7 @@ class WyckoffProEngine:
             if (
                 close > tr.creek + 0.15 * atr
                 and close_pos >= 0.55
-                and ((oi_available and oi_rising) or vol_z >= 1.0 or (not cfg.use_oi_confirm and vol_z >= 0.6))
+                and ((oi_available and (oi_rising or oi_falling)) or vol_z >= 1.0 or (not cfg.use_oi_confirm and vol_z >= 0.6))
             ):
                 tr.sos_index = i
                 tr.phase = "PHASE_D"
@@ -1092,22 +1102,18 @@ class WyckoffProEngine:
         # B5 波动扩张（破位需要空间）
         if (high - low) >= 0.9 * atr:
             score += 1
-        # B6 空头增仓：价跌且持仓量上升
-        if (
-            self.cfg.use_oi_confirm
-            and oi_available
-            and oi_rising
-            and close < (self._prev_close or close)
-        ):
+        # B6 持仓变化共振：新空增仓（OI 升）或多头砍仓踩踏（OI 降）均可确认破位
+        # 注：入参 oi_rising 已由调用侧对两种情形做过 OR 合并
+        if self.cfg.use_oi_confirm and oi_available and oi_rising \
+                and close < (self._prev_close or close):
             score += 1
         # B7 蓄势充分（破位前存在横盘前期）
         if max(0, i - self._b_start) >= max(self.cfg.min_cause_bars // 2, 3):
             score += 1
-        # B8 努力与结果吸收（放量且单位振幅成交密度高）
-        if self._trs and self._vols:
-            er = self._vols[-1] / (self._trs[-1] + 1e-9)
-            if er >= (vol_ma / (atr + 1e-9)) * 1.05:
-                score += 1
+        # B8 宽幅破位：真实下破需“努力=结果”的宽实体阴线；窄幅阴跌多为流动性缺失而非抛压
+        spread = max(high - low, 1e-9)
+        if spread / max(atr, 1e-9) >= 1.20:
+            score += 1
         # B9 真实下行空间：区间高度向下投射后的 R:R ≥ 2.0（非构造下限，可失败）
         recent_high = max(highs[-3:]) if len(highs) >= 3 else high
         risk = max(recent_high - close, 1e-9)
@@ -1124,8 +1130,15 @@ class WyckoffProEngine:
     ) -> tuple[int, int]:
         """统一处理破冰（FTI）信号：真实评分 + 结构止损/目标 + 区间关闭。"""
         stop, target, _structural = self._calc_fti_stops(close, high, low, atr)
+        # 新空增仓与多头砍仓（OI 降）均可确认破位
+        ois = list(self._ois)
+        oi_falling = False
+        if len(ois) >= 3:
+            ma = float(np.mean(ois[:-1]))
+            oi_falling = ma > 1.0 and ois[-1] < ma * 0.997
         score = self._evaluate_breakdown_tests(
-            tr, i, close, high, low, atr, volume, vol_ma, oi_rising, oi_available
+            tr, i, close, high, low, atr, volume, vol_ma,
+            bool(oi_rising or oi_falling), oi_available
         )
         self._emit(
             tr, i, "FTI", close, er_ratio, f"{note}（九大检验={score}/9）",
@@ -1278,18 +1291,29 @@ class WyckoffProEngine:
 # ============================================================================
 
 class DistributionProEngine:
-    """高位派发与下跌途中的再派发（Re-distribution）识别引擎。"""
+    """高位派发与下跌途中的再派发（Re-distribution）识别引擎。
+
+    顶部结构与底部结构在物理上不对称：买入高潮多为 3 根天量恐慌簇，而顶部常见
+    “次高点缩量衰竭”；且顶部横盘时长普遍短于底部吸筹。因此本引擎基于传入配置
+    **按比例派生**顶部专用参数（而非仅在 config is None 时生效），否则由 runner
+    传入的吸筹参数会静默覆盖派发侧阈值。
+    """
+
+    #: 顶部相对底部的参数缩放系数
+    TOP_VOL_Z_SCALE = 0.85      # 顶部放量阈值放宽（缩量双顶也要能识别）
+    TOP_AR_SCALE = 0.85         # 顶部 AR 回落幅度要求放宽
+    TOP_CAUSE_SCALE = 0.70      # 顶部横盘时长要求缩短
 
     def __init__(self, config: WyckoffProConfig | None = None, anchor: float = 1_000_000.0) -> None:
-        if config is None:
-            cfg = WyckoffProConfig(
-                vol_z_thresh=1.5,
-                ar_min_move_atr=1.5,
-                min_cause_bars=18,
-            )
-        else:
-            cfg = config
+        base = config or WyckoffProConfig()
+        cfg = WyckoffProConfig(**{**base.__dict__})
+        cfg.vol_z_thresh = base.vol_z_thresh * self.TOP_VOL_Z_SCALE
+        cfg.ps_vol_z_thresh = base.ps_vol_z_thresh * self.TOP_VOL_Z_SCALE
+        cfg.ar_min_move_atr = base.ar_min_move_atr * self.TOP_AR_SCALE
+        cfg.min_cause_bars = max(int(round(base.min_cause_bars * self.TOP_CAUSE_SCALE)), 5)
+        cfg.max_tr_bars = max(int(round(base.max_tr_bars * self.TOP_CAUSE_SCALE)), 60)
         self.cfg = cfg
+        self.base_cfg = base
         self.anchor = float(anchor)
 
     def process(self, df: pd.DataFrame, vsa_df: pd.DataFrame | None = None) -> "WyckoffProResult":
@@ -1412,8 +1436,12 @@ class BacktestConfigPro:
     fees: float = 0.00015              # 手续费率
     slippage: float = 0.0003           # 滑点率
     max_hold_bars: int = 55            # 时间止损窗口
-    trail_after_r: float = 1.2         # 浮盈超过 1.2R 启动 ATR 移动止损
+    trail_after_r: float = 1.2         # 浮盈超过该 R 后启用 ATR 移动止损（仅在突破确认后生效）
     trail_atr_mult: float = 2.5        # 移动止损 ATR 倍数
+    breakeven_min_r: float = 2.0       # 推保本前必须达到的最小浮盈 R（防 Phase D 回踩被洗）
+    partial_exit_enabled: bool = True  # 两阶段分批止盈
+    partial_exit_r: float = 1.5        # 第一目标 R，达则减仓
+    partial_exit_frac: float = 0.4     # 减仓比例（按当前整手取整）
     allow_short: bool = True
     use_weekly_filter: bool = False    # MTF 周线大背景过滤：三品种实测均为负向（avgR 全面下降），故默认关闭
     limit_pct: float = 0.05            # 涨跌停幅度（0 表示禁用封板保护），用于入场/出场流动性枯竭检测
@@ -1446,6 +1474,18 @@ def compute_weekly_macro_trend(df: pd.DataFrame, lag_weeks: int = 1) -> np.ndarr
         return np.zeros(len(df), dtype=int)
 
 
+def _exclusive_atr(df: pd.DataFrame, win: int = 20) -> np.ndarray:
+    """执行端 ATR：统计量排除当根，与引擎 / VSA 口径一致（零未来函数）。"""
+    h = df["high"].to_numpy(dtype=float)
+    l = df["low"].to_numpy(dtype=float)
+    c = df["close"].to_numpy(dtype=float)
+    prev = np.roll(c, 1)
+    prev[0] = c[0]
+    tr = np.maximum(h - l, np.maximum(np.abs(h - prev), np.abs(l - prev)))
+    s = pd.Series(tr).rolling(win, min_periods=1).mean().shift(1).bfill()
+    return np.maximum(s.to_numpy(dtype=float), 1e-9)
+
+
 def run_wyckoff_backtest(
     df: pd.DataFrame,
     acc_res: WyckoffProResult,
@@ -1453,11 +1493,17 @@ def run_wyckoff_backtest(
     bt_cfg: BacktestConfigPro | None = None,
     prefer_vectorbt: bool = True,
     contract_size: float = 1.0,
+    signal_df: pd.DataFrame | None = None,
 ) -> dict:
     """运行双向维科夫组合回测（内置高精度金字塔事件回测器为唯一撮合事实源）。
 
     ``prefer_vectorbt`` 参数保留仅作 API 兼容，已弃用：vectorbt 的 from_signals 无法
     表达逐笔结构止损/止盈，只能传固定百分比，与维科夫引擎给出的结构风控矛盾，已移除。
+
+    :param df: 执行端数据（主力连续，含真实换月跳空）
+    :param signal_df: 信号端数据（无跳空平滑指数）。若与 ``df`` 不同，则事件自带的
+        stop/target 处于信号空间，入场时会按**点位距离**平移回执行空间，避免换月缺口
+        造成止盈止损错位；成交、持仓与盈亏始终在主连真实价格上计算。
     """
     cfg = bt_cfg or BacktestConfigPro()
     all_events = list(acc_res.events)
@@ -1497,12 +1543,23 @@ def run_wyckoff_backtest(
     highs = df["high"].to_numpy(dtype=float)
     lows = df["low"].to_numpy(dtype=float)
     closes = df["close"].to_numpy(dtype=float)
-    atrs = acc_res.df["atr"].to_numpy(dtype=float)
+    # 执行端 ATR（严格因果，排除当根）
+    atrs = _exclusive_atr(df)
+    # 信号端收盘价（用于把事件止损/目标按点位距离平移回执行空间）
+    sig_df = signal_df if signal_df is not None else df
+    sig_closes = sig_df["close"].to_numpy(dtype=float)
+    is_bridged = sig_df is not df
     # 严格因果：入场与移动止损均使用“截至前一根”的 ATR，杜绝当根高低价提前泄入
     atrs_prev = np.empty_like(atrs)
     atrs_prev[0] = atrs[0]
     atrs_prev[1:] = atrs[:-1]
     idx_arr = df.index
+
+    # 相位驱动止损棘轮所需：每个交易区间的首次突破确认（SOS/JAC）位置
+    breakout_idx: dict[int, int] = {}
+    for ev in all_events:
+        if ev.kind in ("JAC", "SOS"):
+            breakout_idx.setdefault(ev.tr_id, ev.index)
 
     balance = float(cfg.init_cash)
     equity_curve = np.zeros(n, dtype=float)
@@ -1563,13 +1620,30 @@ def run_wyckoff_backtest(
                     )
                     if max(base_p["peak_r"], cur_open_r) < cfg.pyramid_min_r:
                         continue
-                    if base_p["direction"] == "long":
-                        base_p["trail_stop"] = max(base_p["trail_stop"], base_p["entry_price"] * 1.001)
-                    else:
-                        base_p["trail_stop"] = min(base_p["trail_stop"], base_p["entry_price"] * 0.999)
+                    # 仅在突破已确认时才允许将底仓推至保本，避免 Phase D 正常回踩被扫出
+                    base_confirmed = (
+                        base_p["tr_id"] in breakout_idx
+                        and i >= breakout_idx[base_p["tr_id"]]
+                    )
+                    if base_confirmed or max(base_p["peak_r"], cur_open_r) >= cfg.breakeven_min_r:
+                        if base_p["direction"] == "long":
+                            base_p["trail_stop"] = max(base_p["trail_stop"], base_p["entry_price"] * 1.001)
+                        else:
+                            base_p["trail_stop"] = min(base_p["trail_stop"], base_p["entry_price"] * 0.999)
 
-                stop = ev.stop
-                target = ev.target
+                stop_sig = float(ev.stop)
+                target_sig = float(ev.target)
+                if is_bridged and stop_sig > 0 and target_sig > 0 and ev.index < len(sig_closes):
+                    # 指数空间 → 主连空间：保留结构与入场价之间的点位距离
+                    sc = float(sig_closes[ev.index])
+                    if ev.direction == "long":
+                        stop = fill_open - (sc - stop_sig)
+                        target = fill_open + (target_sig - sc)
+                    else:
+                        stop = fill_open + (stop_sig - sc)
+                        target = fill_open - (sc - target_sig)
+                else:
+                    stop, target = stop_sig, target_sig
                 valid_gap = (fill_open > stop) if ev.direction == "long" else (fill_open < stop)
                 if not valid_gap:
                     continue
@@ -1598,6 +1672,7 @@ def run_wyckoff_backtest(
                 open_positions.append({
                     "tr_id": ev.tr_id,
                     "signal": ev.name,
+                    "signal_kind": ev.kind,
                     "regime": ev.regime,
                     "direction": ev.direction,
                     "nine_tests": ev.nine_tests_score,
@@ -1610,6 +1685,9 @@ def run_wyckoff_backtest(
                     "size": size,
                     "risk_capital": actual_risk,
                     "peak_r": 0.0,
+                    "partial_done": False,
+                    "partial_pnl": 0.0,
+                    "partial_size": 0.0,
                 })
 
         # Step C: 检查所有当前持仓（含当根新开仓）在 bar i 的止损/止盈/移动止损
@@ -1655,9 +1733,32 @@ def run_wyckoff_backtest(
                 else:
                     cur_r = (highs[i] - entry_p) / init_risk
                     pos["peak_r"] = max(pos["peak_r"], cur_r)
-                    if pos["peak_r"] >= cfg.trail_after_r:
+                    # 两阶段分批止盈：达第一目标先减仓锁定利润，剩余仓位交给趋势跟踪
+                    if (
+                        cfg.partial_exit_enabled
+                        and not pos.get("partial_done")
+                        and cur_r >= cfg.partial_exit_r
+                    ):
+                        cut = float(int(pos["size"] * float(np.clip(cfg.partial_exit_frac, 0.0, 0.9))))
+                        if cut >= 1.0:
+                            p_price = entry_p + cfg.partial_exit_r * init_risk
+                            p_fill = p_price * (1.0 - cfg.slippage)
+                            pnl = (p_fill - entry_p) * cut * contract_size
+                            pnl -= (entry_p + p_fill) * cut * contract_size * cfg.fees
+                            balance += pnl
+                            pos["partial_pnl"] = pos.get("partial_pnl", 0.0) + pnl
+                            pos["partial_size"] = cut
+                            pos["size"] -= cut
+                            pos["partial_done"] = True
+                    confirmed = pos["tr_id"] in breakout_idx and i >= breakout_idx[pos["tr_id"]]
+                    if not confirmed:
+                        # Phase C 底仓：突破确认前严禁仅因浮盈推保本，保留结构止损
+                        pass
+                    elif pos["peak_r"] >= cfg.trail_after_r:
                         new_trail = closes[i] - cfg.trail_atr_mult * atrs_prev[i]
-                        pos["trail_stop"] = max(pos["trail_stop"], entry_p * 1.001, new_trail)
+                        pos["trail_stop"] = max(pos["trail_stop"], new_trail)
+                        if pos["peak_r"] >= cfg.breakeven_min_r:
+                            pos["trail_stop"] = max(pos["trail_stop"], entry_p * 1.001)
             else:
                 eff_stop = min(pos["stop"], pos["trail_stop"])
                 # 1. 空头跳空穿仓
@@ -1684,9 +1785,30 @@ def run_wyckoff_backtest(
                 else:
                     cur_r = (entry_p - lows[i]) / init_risk
                     pos["peak_r"] = max(pos["peak_r"], cur_r)
-                    if pos["peak_r"] >= cfg.trail_after_r:
+                    if (
+                        cfg.partial_exit_enabled
+                        and not pos.get("partial_done")
+                        and cur_r >= cfg.partial_exit_r
+                    ):
+                        cut = float(int(pos["size"] * float(np.clip(cfg.partial_exit_frac, 0.0, 0.9))))
+                        if cut >= 1.0:
+                            p_price = entry_p - cfg.partial_exit_r * init_risk
+                            p_fill = p_price * (1.0 + cfg.slippage)
+                            pnl = (entry_p - p_fill) * cut * contract_size
+                            pnl -= (entry_p + p_fill) * cut * contract_size * cfg.fees
+                            balance += pnl
+                            pos["partial_pnl"] = pos.get("partial_pnl", 0.0) + pnl
+                            pos["partial_size"] = cut
+                            pos["size"] -= cut
+                            pos["partial_done"] = True
+                    confirmed = pos["tr_id"] in breakout_idx and i >= breakout_idx[pos["tr_id"]]
+                    if not confirmed:
+                        pass
+                    elif pos["peak_r"] >= cfg.trail_after_r:
                         new_trail = closes[i] + cfg.trail_atr_mult * atrs_prev[i]
-                        pos["trail_stop"] = min(pos["trail_stop"], entry_p * 0.999, new_trail)
+                        pos["trail_stop"] = min(pos["trail_stop"], new_trail)
+                        if pos["peak_r"] >= cfg.breakeven_min_r:
+                            pos["trail_stop"] = min(pos["trail_stop"], entry_p * 0.999)
 
             if exit_p is None and (i - pos["entry_index"]) >= cfg.max_hold_bars:
                 exit_p = closes[i]
@@ -1733,7 +1855,7 @@ def _settle_pos(pos: dict, i: int, dt: object, exit_fill: float, reason: str, fe
     entry_p = pos["entry_price"]
     gross = ((exit_fill - entry_p) * size * contract_size) if d == "long" else ((entry_p - exit_fill) * size * contract_size)
     fee = (entry_p + exit_fill) * size * contract_size * fee_rate
-    net = gross - fee
+    net = gross - fee + float(pos.get("partial_pnl", 0.0))
     pos["exit_index"] = i
     pos["exit_time"] = str(dt)[:19]
     pos["exit_price"] = round(float(exit_fill), 4)

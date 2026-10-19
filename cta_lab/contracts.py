@@ -47,6 +47,7 @@ class FutureSpec:
     pricetick: float       # 最小变动价位
     margin_rate: float = 0.10   # 保证金率（回测资金占用参考）
     limit_pct: float = 0.05     # 涨跌停幅度（默认 5%，用于回测流动性封板保护）
+    sector: str = "其他"        # 板块（用于组合层同向并发风控）
 
     @property
     def em_symbol(self) -> str:
@@ -171,6 +172,36 @@ DEFAULT_LIMIT_PCT: dict[str, float] = {
     "t": 0.02, "tf": 0.02, "tl": 0.02, "ts": 0.012,
 }
 
+# 板块划分（按品种经济属性，用于组合层「同板块同向并发上限」风控）
+SECTOR_GROUPS: dict[str, tuple[str, ...]] = {
+    "黑色": ("rb", "hc", "wr", "i", "j", "jm", "ss", "sf", "sm"),
+    "有色": ("cu", "bc", "al", "zn", "pb", "ni", "sn", "ao", "lc", "si", "ps"),
+    "贵金属": ("au", "ag"),
+    "能化": ("sc", "lu", "fu", "bu", "ru", "nr", "br", "l", "v", "pp", "eg", "eb", "pg",
+             "ta", "ma", "sa", "fg", "ur", "sp", "px", "sh", "pr"),
+    "油脂油料": ("m", "y", "p", "a", "b", "rm", "oi", "c", "cs"),
+    "软商品": ("cf", "cy", "sr", "ap", "cj", "pk", "jr", "ri", "wh", "pm", "rs"),
+    "养殖": ("jd", "lh", "rr", "lg"),
+    "板材": ("fb", "bb"),
+    "航运": ("ec",),
+    "股指国债": ("if", "ih", "ic", "im", "t", "tf", "ts", "tl"),
+}
+
+_SECTOR_OF: dict[str, str] = {
+    code: sector for sector, codes in SECTOR_GROUPS.items() for code in codes
+}
+
+
+def sector_of(symbol: str) -> str:
+    """按品种代码取板块名（大小写不敏感，支持 `rb.SHFE` 与 `rb_index` 两种写法）。"""
+    key = str(symbol).strip().lower()
+    if "." in key:                      # rb.SHFE -> rb
+        key = key.split(".", 1)[0]
+    if key.endswith("_index"):
+        key = key[: -len("_index")]
+    return _SECTOR_OF.get(key, "其他")
+
+
 FUTURES: dict[str, FutureSpec] = {
     code: FutureSpec(
         symbol=code,
@@ -179,6 +210,7 @@ FUTURES: dict[str, FutureSpec] = {
         size=size,
         pricetick=tick,
         limit_pct=DEFAULT_LIMIT_PCT.get(code.lower(), 0.06),
+        sector=_SECTOR_OF.get(code.lower(), "其他"),
     )
     for code, name, ex, size, tick in _RAW
 }

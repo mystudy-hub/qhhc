@@ -269,7 +269,11 @@ def api_wyckoff(
             return fallback
 
     tcfg = TradeConfig(
-        trade_signals=("TEST", "LPS") if pure_wyckoff else ("TEST", "LPS", "FTI")
+        trade_signals=(
+            ("SPRING3", "TEST", "LPS")
+            if pure_wyckoff
+            else ("SPRING3", "TEST", "LPS", "JAC", "SOS", "FTI")
+        )
     )
     ecfg = (
         WyckoffConfig.create_micro()
@@ -331,7 +335,8 @@ def api_wyckoff(
     acc_pack["signals"] = [
         {"time": str(e.time)[:10], "kind": e.kind,
          "direction": e.direction, "price": round(float(e.price), 4)}
-        for e in result.acc.events if e.kind in ("TEST", "LPS", "FTI")
+        for e in result.acc.events
+        if e.kind in ("SPRING3", "TEST", "LPS", "JAC", "SOS", "FTI")
     ]
 
     sim = result.sim_both
