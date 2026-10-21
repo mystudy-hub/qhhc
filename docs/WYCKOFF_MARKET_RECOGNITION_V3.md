@@ -1058,4 +1058,296 @@ trend_now: SignedDelta_n > 0 且 Slope_n > 0 且 ER_n >= phase_e_min_er
 
 第 8 步新形成的证据可以用于本根的新结构解释（第 9 步），但不能作为本根任何事件的起始上下文。
 
-<!-- V3-CONTINUE -->
+## 10. V3 参数登记表
+
+全部数值标为 P：待验证。级别：**C** = 首轮校准（共 8 个）；**B** = 冻结基线，首轮不调；**M** = 模式开关，更换即为新研究配置。
+
+### 10.1 数据、指标与背景
+
+| 参数 | 默认 | 级别 |
+|---|---:|:---:|
+| `warmup_bars` | 60，且不低于所有启用窗口所需历史 | B |
+| `atr_period`（n_atr） / `tr_cap_mult` | 14 / 3.0 | B |
+| `baseline_mode` | `robust`（`standard` 同时计算） | M |
+| `volume_period` / `volume_cap_mult` / `volume_min_samples`（仅日线） | 20 / 3.0 / 15 | B |
+| `intraday_volume_mode` | `session_matched` | M |
+| `session_baseline_days` / `session_min_samples`（仅日内） | 20 / 10 | B |
+| `oi_mode` | `annotate` | M |
+| `oi_window`（n_oi） / `oi_flat_band` | 20 / 1.0 | B |
+| `trend_window` / `trend_sma_fast` / `trend_sma_slow` | 20 / 20 / 50 | B |
+| `trend_min_displacement_atr` / `trend_min_abs_slope_atr` / `trend_min_er` | 2.0 / 0.05 / 0.30 | B |
+| `larger_context_window` / `larger_context_min_displacement_atr` / `larger_context_min_er` | 50 / 3.0 / 0.30 | B |
+| `regime_persistence_bars` | 2 | B |
+| `confirm_step_units` | 1 | B |
+
+### 10.2 区间与参照位
+
+| 参数 | 默认 | 级别 |
+|---|---:|:---:|
+| `boundary_resolution_units` | 2 | B |
+| `boundary_atr_fraction` | 0.10 | **C** |
+| `range_min_width_atr` / `range_max_width_atr` | 3.0 / 12.0 | B |
+| `generic_range_window` / `generic_range_max_er` | 30 / 0.25 | B |
+| `range_interior_close_fraction` / `range_min_touches_per_side` / `touch_min_separation_bars` | 0.80 / 2 / 3 | B |
+| `event_min_range_age` | 15 | **C** |
+| `mature_range_age` | 25；校准时保持 `mature - event_min = 10` | 随 C 联动 |
+| `range_max_age` / `range_stale_min_age` / `range_stale_bars` | 200 / 60 / 40 | B |
+| `pivot_confirm_bars` / `pivot_min_reaction_atr` | 3 / 1.0 | B |
+| `creek_mode` | `range_and_internal` | M |
+
+### 10.3 事实事件
+
+| 参数 | 默认 | 级别 |
+|---|---:|:---:|
+| `climax_new_extreme_window` | 20 | B |
+| `climax_min_rvol` | 2.5 | **C** |
+| `climax_min_ns` / `sc_min_cp` / `bc_max_cp` / `climax_min_rejection_wick` | 1.8 / 0.35 / 0.65 / 0.25 | B |
+| `cluster_min_effort` / `cluster_min_span_atr` / `cluster_stop_min_rvol` | 2.0 / 2.5 / 1.5 | B |
+| `absorption_min_rvol` / `absorption_max_ns` / `low_progress_max_move_atr` | 2.0 / 0.7 / 0.5 | B |
+| `absorption_response_max_bars` / `absorption_current_evidence_max_age` | 5 / 10 | B |
+| `spring_max_depth_atr` | 2.0 | **C** |
+| `spring_max_pattern_bars` / `shakeout_max_pattern_bars` | 2 / 3 | B |
+| `spring_min_cp` / `ut_max_cp` | 0.70 / 0.30 | B |
+| `spring_low_volume_max_rvol`（严格小于） / `spring_high_volume_min_rvol`（严格大于） | 0.8 / 1.3 | B |
+| `strong_break_min_rvol` | 1.8 | **C** |
+| `strong_break_min_ns` / `joc_min_cp` / `fti_max_cp` | 1.5 / 0.75 / 0.25 | B |
+| `strong_bar_min_move_atr` | 0.5 | **C** |
+| `sos_sow_min_rvol` / `sos_sow_min_ns` / `sos_min_cp` / `sow_max_cp` | 1.4 / 1.3 / 0.70 / 0.30 | B |
+| `gap_flag_min_atr` | 1.0 | B |
+
+### 10.4 序列、确认与失效
+
+| 参数 | 默认 | 级别 |
+|---|---:|:---:|
+| `ar_window_min` / `ar_window_max` | 3 / 8 | B |
+| `ar_reversal_close_steps` / `ar_reversal_atr` | 2 / 0.5 | B |
+| `st_window_min` / `st_window_max` / `st_response_max_bars` | 5 / 15 / 3 | B |
+| `st_near_support_atr` / `st_max_effort_vs_climax` / `st_max_ns_vs_climax` | 0.5 / 0.60 / 0.70 | B |
+| `test_window_min` | 3 | B |
+| `test_window_max` | 10 | **C** |
+| `test_near_support_atr` / `test_max_rvol` / `test_max_ns` | 0.5 / 0.85 / 1.0 | B |
+| `test_max_effort_vs_spring` / `test_response_max_bars` | 0.65 / 3 | B |
+| `spring_sos_window_min` / `spring_sos_window_max` / `spring_fail_consecutive_closes` | 1 / 10 / 2 | B |
+| `breakout_hold_closes` / `breakout_fail_inside_closes` / `breakout_fail_deep_fraction` | 3 / 2 / 0.50 | B |
+| `breakout_validity_window` / `body_retrace_fraction` | 12 / 0.50 | B |
+| `lps_min_pullback_bars` / `lps_max_pullback_bars` | 2 / 8 | B |
+| `lps_max_pullback_effort` / `lps_max_pullback_ns` / `lps_min_retrace_atr` / `lps_response_min_move_atr` | 0.90 / 1.0 / 0.5 / 0.3 | B |
+| `lps_window_max` | 15 | **C** |
+| `lps_current_max_age` / `phase_d_followthrough_bars` | 20 / 10 | B |
+| `strict_backup_min_pullback_bars` / `strict_backup_max_mean_rvol` / `strict_backup_max_mean_ns` / `backup_turn_min_rvol` | 3 / 0.85 / 1.0 / 1.2 | B |
+| `utad_response_window_min` / `utad_response_window_max` | 1 / 12 | B |
+| `phase_e_min_outside_closes` / `phase_e_min_distance_atr` / `phase_e_min_er` | 5 / 2.0 / 0.40 | B |
+
+### 10.5 波浪与结构
+
+| 参数 | 默认 | 级别 |
+|---|---:|:---:|
+| `wave_module_enabled` | true（关闭时 A、P、D 组输出 `not_evaluable`） | M |
+| `wave_reversal_atr` | 1.0（必须报告 1.0/1.5/2.0 敏感性） | B |
+| `wave_stats_max_completed` / `wave_min_completed_each_direction` / `wave_dominance_ratio` | 6 / 2 / 1.2 | B |
+| `bias_signal_recent_bars` / `bias_sequence_recent_bars` / `structural_opposite_persistence_bars` | 10 / 20 / 2 | B |
+
+### 10.6 参数约束与 V2 对照
+
+参数取值必须满足：所有 `*_min <= *_max`；`spring_low_volume_max_rvol < spring_high_volume_min_rvol`；`range_min_width_atr < range_max_width_atr`；`mature_range_age >= event_min_range_age`；`spring_max_pattern_bars ∈ {1,2}` 且 `shakeout_max_pattern_bars >= spring_max_pattern_bars`；`lps_min_pullback_bars < lps_max_pullback_bars`；`strict_backup_min_pullback_bars <= lps_max_pullback_bars`；`warmup_bars` 覆盖所有启用窗口。不满足时拒绝运行，不静默修正。
+
+| V2 参数 | V3 处理 |
+|---|---|
+| `roll_confirm_days`、`liquid_min_ratio` | 删除（不覆盖实际合约） |
+| `boundary_ticks` | 改为 `boundary_resolution_units`，单位为指数价格分辨率 |
+| 固定 1 tick 的确认距离 | 改为 `confirm_step_units * price_resolution` |
+| `lps_turn_max_bars` | 删除；改用每回合固定截止 `lps_max_pullback_bars`（第 7.6 节） |
+| 新增 | `baseline_mode`、`confirm_step_units`、`lps_max_pullback_bars`、`lps_current_max_age`、`phase_d_followthrough_bars` |
+
+同一参数被多条规则复用时，调整会同时影响这些规则；拆分成独立参数属于参数模式变化，必须登记。
+
+## 11. 验证方案与验收要求
+
+### 11.1 工程正确性：必须通过
+
+| 验收项 | 要求 |
+|---|---|
+| 前缀回放一致性 | 只输入到 t 的回放结果，与全量回放中保存的 t 时快照完全一致 |
+| 未来扰动 | 修改 t 之后的数据，不改变截至 t 的任何输出 |
+| 后续追认 | t+N 的确认不出现在 t 的历史可用状态中 |
+| 边界冻结 | 当前 K 线不抬高自身阻力；失败后原 S/R/ε 不移动 |
+| 窗口与冲突 | 窗口末根可确认，末根之后不确认；同根失效优先；依附级联正确 |
+| 数据质量 | 零量、缺失、H=L、ATR=0、来源不符、事后权重、成分变动返回明确原因 |
+| 版本 | 输出保存数据、规则和参数版本，可重放 |
+
+### 11.2 构造路径用例：三组独立验收
+
+三组可以分别实现和验收。C 组用构造的已完成波浪记录作输入，不依赖 A、B 组先通过。这些用例验证规则实现，不说明市场预测价值。
+
+**A 组：数据与指标**
+
+| 编号 | 构造 | 期望 |
+|---|---|---|
+| A01 | 声明的加权指数缺失，数据库中存在同名合成 `*_index` | `index_source_mismatch`，不替换输入 |
+| A02 | 两成分极值不同步，`ohlc_method` 为成分 H/L 分别加权 | 拒绝 |
+| A03 | 指数价格 100.37，成分最小跳动为 1 | 按 100.37 比较，ε 按 price_resolution 计算 |
+| A04 | Bv 稳定在 100；t0 根成交量 500，其余各根 100 | t0+10：standard Bv=120，robust Bv=110（截尾到 300）；t0+21：两者都回到 100 |
+| A05 | 序列前 n_atr 根 | ATR 初始值为未截尾均值，截尾从下一根开始 |
+| A06 | 日内同槽有 12 个合格样本 | 可用（使用 session_min_samples=10，不使用 15） |
+| A07 | 日内指数使用当日收盘持仓作权重 | 拒绝作实时输入，标记 `ex_post_weights` |
+
+**B 组：区间、事件与生命周期**
+
+| 编号 | 构造 | 期望 |
+|---|---|---|
+| B01 | R=100，突破后 20 个收盘从 130 单调降到 110 | 不输出向上 Phase E |
+| B02 | 低量普通上破，随后 3 根收于 R+ε 之上 | 有效性假设维持确认，区间 `exit_up_accepted` |
+| B03 | R=100，ε=0.2，收盘 100.3、100.1、100.4、100.5、100.6 | 第五根维持确认；tB 不变；100.4 关联为新突破事实，不新建假设 |
+| B04 | 首根下穿 3 ATR | `SUPPORT_UNDERCUT` 与 `DEEP_UNDERCUT`，进入深穿观察 |
+| B05 | 供应占优在 p 收盘才成立，p+1 收回形成 UT | `UT_FEATURE`，不创建 UTAD 候选 |
+| B06 | 三根高潮簇 p=t-2；trend_context 在 t-3 为下跌、在 t-1 已不满足 | 按 t-3 快照判定，簇成立 |
+| B07 | 吸收候选创建根已收于 S-ε 下方，下一根再收于下方 | 第二根失效（`INCL`） |
+| B08 | 阴线测试 + 下一根越过测试高点 | `TEST_OBSERVED` 后 `TEST_RESPONSE_CONFIRMED` |
+| B09 | 突破在第 12 根过期，第 13 根满足 LPS 反应条件 | LPS 候选已随来源在第 12 根过期；不确认、不复活 |
+| B10 | 来源收盘 105；前一根收 104.8、高 105；反应根收 105.2，净推进 0.4 ATR | LPS 确认，不被新高重置 |
+| B11 | 回调首根即最低点，之后 3 根同低低量横盘，再出现反应 | 回调段长度为 4，确认 |
+| B12 | LPS 确认早于外侧三根维持 | 来源假设 confirmed，区间 `exit_up_accepted` |
+| B13 | 内部 LPS 确认后收盘跌破 L_q-ε | LPS 事实保留，当前有效性 invalidated，Phase D 支持撤销 |
+| B14 | 同一根既是新建突破又是 SOS | 只创建突破来源的一个 LPS 候选 |
+| B15 | UT 后低量较低高点测试，下一根跌破测试低点 | `UT_TEST_CONFIRMED` |
+| B16 | SOS + LPS 确认，之后 10 根既无推进也无需求占优 | 只有 Phase D 候选 |
+| B17 | 突破假设过期时仍在区间外，之后 outside_up_streak 达到 3 | 区间 `exit_up_accepted`，`late_acceptance`，旧假设不复活 |
+| B18 | AR 幅度 2.5 ATR | AR 不确认 |
+
+**C 组：波浪与方向证据**
+
+| 编号 | 构造 | 期望 |
+|---|---|---|
+| C01 | 上波活动率 0.6、下波 1.2；上行峰值 3、净 2.5，下行峰值 1、净 0.5；已有支撑响应序列 | A=down_more_active，P=demand，B=demand；路径 `boundary_supported` 与 `absorption_response`；需求占优成立 |
+| C02 | 同 C01 但无支撑响应序列，且下行结果未递减 | 无路径，`neutral` |
+| C03 | P=demand，A=balanced，最新下行波峰值低于此前中位数 | 路径 `supply_exhaustion` |
+| C04 | 上行波回吐后收盘低于起点基准价 | `signed_end_displacement < 0` 被保存 |
+| C05 | 上波 10 根每根 RVOL 0.8，下波 2 根每根 1.2 | 活动率：下波更高；累计努力：上波 8.0，下波 2.4 |
+
+### 11.3 事件单位、样本选取与相关性
+
+每项统计同时报告：原始事件数、独立候选数、交易区间数、确认链条数、去重后的评价样本数。
+
+- 实时评价的样本选取只能是以下两种之一：每个区间每种路径的第一个候选；或在预先固定的决策时点上已知的最新候选。"区间内最后一个候选"只有区间结束后才知道，只能用于事后描述。
+- 置信区间使用按区间聚类或时间块的重采样，不假设事件独立。
+- Purge/embargo 只解决跨集合的标签重叠，不解决同一集合内部的相关性。
+- 保留全部候选的分母（含失效、超时、`not_evaluable`）。
+
+### 11.4 识别质量与预测价值分开
+
+识别质量指标：候选数量、覆盖率、确认率、失效率、超时率、确认延迟、状态切换次数、`not_evaluable` 比例；按指数、年份、波动环境、日夜盘、多空方向分别报告。
+
+预测价值使用独立的客观标签，并预先登记：
+
+- 锚点：`descriptive_reference_price` = 结束时间不晚于信号 `available_at` 的最后一根 K 线的收盘。信号按时可用时就是信号根收盘；迟到信号使用更晚的收盘。
+- 评价基线：锚点之后的下一根开始观察 20 根，上下各 2 个事前 ATR 障碍，记录先触及哪侧、都未触及、`ambiguous_intrabar`、`censored`。
+- 若以信号根收盘计算的障碍在锚点之前已被触及，标记 `pre_crossed`，单独报告，不计入可预测结果。
+- 补充指标：方向性净位移与回撤、边界外维持比例与失败深度、MFE/MAE。
+
+### 11.5 逐模块增量检验
+
+依次比较，每一步只加入一个模块：
+
+1. 基线：趋势状态 + 普通区间突破。
+2. 加事实事件（SC/BC、Spring/UT、JOC/FTI、SOS/SOW）。
+3. 加测试与反应（ST、Test、UT 测试、LPS/LPSY）。
+4. 加波浪方向证据。
+5. 加内部 Creek/Ice（`creek_mode` 对比）。
+6. `baseline_mode` 对比（robust 对 standard）。
+7. OI（`oi_mode=filter` 对 `annotate`）。
+8. 量能口径对比（如 `sum_raw` 对 `weight_scaled`），各自独立校准。
+
+比较对象是趋势、波动和区间位置相近的样本。若某模块只重复均线和普通突破的信息，可以保留作解释，但不能声称有独立预测优势。
+
+### 11.6 时间滚动、参数搜索与多重检验
+
+- 按时间划分训练、验证与最终样本外，研究起点为 24/6/6 个月滚动；窗口长度待验证。
+- 只在训练/验证区间选参；最终样本外前冻结规则与配置。
+- 登记每一次试验的配置与结果（包括被放弃的配置），报告试验总数。
+- 首轮只在 8 个 C 级参数上做邻域扰动，报告结果在邻域内是否稳定。
+- 多个模块、多个配置的比较需要多重检验校正（如 White Reality Check、Hansen SPA，或 Romano-Wolf / Holm）。
+- 只有建立客观预测对象、用独立样本校准后才输出概率，并报告校准曲线、Brier 分数和样本量；默认 `probability=null`。
+
+### 11.7 接入交易层前的额外验证
+
+加权指数不可成交。交易层必须另行定义：从指数信号到可成交合约的映射规则、指数与该合约之间的基差处理、合约换月、下一可成交价、手续费、滑点、涨跌停成交限制与风险预算。指数上的边界不能直接当作可成交合约的止损价。收盘后才能知道的信号不能按同一根收盘价成交。这些不属于 V3 范围，需要独立验证。
+
+## 12. 实施顺序与范围
+
+### 12.1 实施顺序
+
+1. 数据层：指数输入契约与合格性检查、价格定点表示、质量标记、版本记录。
+2. 指标层：两种基准模式的 ATR 与 Bv、Effort/CumEffort、OI 特征、因果摆动点。**A 组验收。**
+3. 趋势与区间：路径 A/B、区间生命周期、outside_streak、内部 Creek/Ice。
+4. 事实事件：第 6 节全部，含快照环。
+5. 生命周期：计数起点、依附级联、ST/Test/UT 测试、突破转换表、LPS 回合。**B 组验收。**
+6. 波浪与方向证据：可与第 3–5 步并行开发。**C 组验收。**
+7. 全部验收通过后冻结默认版本，按第 11.5 节逐模块研究；通过后再设计交易层。
+
+未实现的模块必须输出 `not_implemented`，不能当成没有发生。
+
+### 12.2 V3 不覆盖的范围
+
+- 实际合约输入、换月处理、合约涨跌停与封板事件。
+- 从成分合约重建加权指数的方法；只有成分 K 线时的近似指数。
+- 成分受限比例等指数层面的涨跌停质量字段。
+- 无 Spring/UT 的 Phase C、曲线或斜线 Creek/Ice、嵌套区间、跨周期结构。
+- 点数图横向计数与目标价。
+- 由 OI 推断参与者身份或主动方向。
+- 概率输出。
+- 从指数信号到可成交合约的执行映射。
+
+## 附录 A：评审意见处置
+
+V1 评审与更早的非正式评审意见的处置见 V2 附录 A，本版未修改的部分继续有效。
+
+### A.1 V2 评审报告各项
+
+核对方法：逐项对照 V2 原文并复算反例；第 2.6 项另对照项目代码。
+
+| 评审条目 | 核对结论 | V3 处置 |
+|---|---|---|
+| 2.1 指数输入契约 | 成立 | 采纳，第 4.1 节；并把范围收窄为只做加权指数 |
+| 2.2 指数精度不能继承合约 tick | 成立 | 采纳，F-13、第 4.3、5.2 节、`confirm_step`；用例 A03 |
+| 2.3 指数无单一涨跌停价 | 成立 | 采纳，`limit_state=not_applicable`；删除 V2 封板事件 |
+| 2.4 同步 OHLC | 成立，反例正确 | 采纳，第 4.2 节；用例 A02 |
+| 2.5 量能口径 | 成立 | 采纳，`volume_method` 必须声明，不设默认；代理偏差列入第 11.5 节 |
+| 2.6 项目 `_index` 不是加权指数 | 成立。已核对 `build_synthetic_index` 对单条主连做累计差值调整、V/OI 原样复制；`load_index_or_synthetic` 静默回退；`_index` 规格继承合约 tick 与涨跌停幅度 | 采纳，I-12、第 4.2 节；用例 A01。代码修改不在本规范交付范围内 |
+| 3.1 重新越界后维持无法确认 | 成立，反例正确 | 采纳，滚动计数；用例 B03 |
+| 3.2 突破过期与 LPS 期限冲突 | 成立 | 采纳选项 1 的变体：LPS 依附来源，来源未确认而过期时同步过期；用例 B09 |
+| 3.3 创高与确认同时为真 | 成立，数值例正确 | 采纳，确认先于重置；用例 B10 |
+| 3.4 最低点早导致长度恒为 1 | 成立 | 采纳并修改：回调段为 b..t-1，最低点只用于价格；用每回合固定截止 `lps_max_pullback_bars` 防止无限续期，不另设反应观察启动时间；用例 B11 |
+| 3.5 两条确认路径状态不一致 | 成立 | 采纳，第 7.5 节唯一转换表 + 区间属性 outside_streak；用例 B12 |
+| 3.6 内部 LPS 确认后无出口 | 成立 | 采纳，第 7.6 节确认后有效性表；用例 B13 |
+| 4.1 E 组单独否决 | 成立。复算反例：活动率 1.2/0.6=2 ≥ 1.2，峰值 3/1 ≥ 1.2 且净位移 2.5>0.5 | 采纳并修改：活动组只描述方向，改为四条路径；用例 C01、C02、C03。V2 附录中该项的"采纳"应视为部分处理 |
+| 4.2 活动率不是累计努力 | 成立，数值例正确 | 采纳，`wave_activity_rate` 与 `wave_cum_effort` 分开；用例 C05 |
+| 4.3 SOS + 局部 LPS 不足以支持 Phase D | 成立 | 采纳，分为候选与规则支持；用例 B16 |
+| 4.4 无 Spring 的 Phase C | 成立 | 采纳，声明 `not_implemented` |
+| 4.5 深穿不等于大量供应 | 成立 | 采纳，改写第 3.2 节；新增 `shakeout_high_volume` 属性。V2 的措辞是我在 V2 中引入的错误 |
+| 5.1 B 组引用未定义的 UT 测试 | 成立 | 采纳"完整定义"选项，第 7.4 节；用例 B15 |
+| 5.2 高潮簇快照来源 | 成立 | 采纳快照环方案，第 6.0 节、F-15；用例 B06 |
+| 5.3 两个样本门槛 | 成立 | 采纳，第 4.5 节表；用例 A06 |
+| 5.4 截尾基准不能先宣称解决假阳性 | 部分成立 | 采纳措辞、双模式并存、ATR 初始化和用例时点修正（A04、A05）。保留 robust 为默认：高潮参照努力的基准不含高潮根、之后各根的基准含它，这是方向确定的偏差，不只是普通离群影响。另，评审称 20 根后两种基准重新相等，准确地说是高潮根离开窗口的第 21 根 |
+| 5.5 "最后一个候选"与迟到锚点 | 成立 | 采纳，第 11.3、11.4 节 |
+| 5.6 验收分层 | 成立 | 采纳，A/B/C 三组与第 12.1 节 |
+
+### A.2 V2 评审未覆盖、本次新增的问题
+
+| 问题 | V3 处置 |
+|---|---|
+| SOS 不限制位置，突破根同时满足 SOS，V2 会从同一根创建两个 LPS 候选 | 来源优先级去重，第 7.6 节；用例 B14 |
+| 有效性假设过期时价格仍在区间外，区间会停留在 `exit_up_candidate`，且永远不能再产生新突破、无法进入 Phase E | 转换表增加 `late_acceptance`；用例 B17 |
+| V2 的 `supply_exhaustion` 路径标签允许 E=supply，但同一情形会被占优规则否决，标签与结论可能矛盾 | 占优直接由路径定义，不再存在矛盾 |
+| 日内指数可能事后用当日收盘持仓重算权重，构成未来信息 | I-12、第 4.2 节；用例 A07 |
+| 成分合约进出会造成指数成交量和 OI 的台阶变化；交割月前后 OI 系统性下降 | `constituent_change`、`delivery_season` 标记 |
+| 项目的 `build_synthetic_index` 以"跳空 > 2 ATR"判定换月，会把非换月的真实跳空一并去掉，破坏 `gap_breakout` 与高潮宽幅信息 | 作为第 2.6 项的补充理由；由 I-12 排除 |
+| 指数不可成交，指数边界不能直接当作合约止损价 | 第 1.1、11.7 节 |
+| V2 附录称截尾解决"系统性假阳性"，表述过强 | 第 4.4 节改为"方向确定、影响待验证的偏差" |
+| 外侧维持与区间状态不应依赖假设状态 | outside_streak 作为区间属性逐根维护，Phase E 直接引用 |
+
+## 附录 B：参考资料与来源边界
+
+- [Wyckoff Analytics：The Wyckoff Method](https://www.wyckoffanalytics.com/wyckoff-method/)：三大定律、事件关系、阶段与非唯一结构路径的概念来源。
+- Richard D. Wyckoff 原始课程、Hank Pruden *The Three Skills of Top Trading*、David H. Weis *Trades About to Happen*：理论学习来源；本次未逐页核对原书，本文的公式、阈值和状态机都是工程提案，不归属于这些作品。
+
+V3 的交付判断：可以据此在加权指数上实现客观、可回放的识别流程；所有市场阈值和预测价值仍待验证。不可违背的是因果性、真实可用时间、边界冻结、输入来源可追溯与证据可追溯，而不是任何未经验证的倍数或根数。
