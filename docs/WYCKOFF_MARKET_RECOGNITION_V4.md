@@ -1,7 +1,7 @@
-# 维科夫加权指数实时行情识别规范 V4.0
+# 维科夫加权指数实时行情识别规范 V4.1
 
-版本日期：2026-10-22  
-规则版本：`4.0`；参数版本：`v4-default-unvalidated`  
+版本日期：2026-10-23<br>
+规则版本：`4.1`；参数版本：`v4.1-default-unvalidated`<br>
 前置文档：[V3.0 规范](WYCKOFF_MARKET_RECOGNITION_V3.md)、[V3.0 评审](WYCKOFF_MARKET_RECOGNITION_V3_REVIEW.md)  
 适用范围：单一期货品种的加权指数序列。不覆盖实际合约、换月与可成交价格。  
 版本性质：完整替代 V3.0 的工程基础规范；阈值尚未完成样本外验证
@@ -23,7 +23,7 @@ V4 以 V3 当前工作区版本为基础，落实 V3 评审中的 R1—R8 及三
 | 快照与 OI | 明确 `context_for_next_bar`；OI 缺失、晚到、零分母独立处理 | 4.6、5.1、6.0 |
 | 评价与验收 | 从真实可用后的首根完整 K 线评价；增加处理顺序、生命周期、三值和边界用例 | 11 |
 
-V4 与 V3 的输出不能混用。前代样本结果不代表 V4 已验证；本次交付为文档，验收用例是实现要求，不声称识别引擎已经通过这些用例。
+V4.1 补齐 V4.0 评审发现的区间绑定、候选来源、期限与描述特征交界，默认阈值数值不变。V4.0、V4.1 与 V3 的输出不能混用；规则与约束变化必须按新版本重新回放。前代样本结果不代表 V4.1 已完成样本外验证。逐项处置见附录 A.4。
 
 ## 1. 目标、理论边界与输出分层
 
@@ -322,6 +322,8 @@ OIz(a..b) = sum(dOI_i, i=a..b) / median(|dOI_(a-n_oi)|, ..., |dOI_(a-1)|)
 
 每个 OI 特征保存独立 `feature_available_at`，不早于参与计算的所有 OI 的 `oi_available_at`。晚到 OI 只追加描述记录，不回写较早快照，也不改变已发布价格事件的 available_at。`oi_mode=annotate` 默认不等待 OI 才发布量价事件；若未来启用 `filter`，受 OI 条件影响的结果必须等待 OI 真正可用。季节性标记只在有明确数据定义时使用，不能作为方向判定。
 
+单根、多根事件与波浪的 OIz 使用同一窗口计算和原因传播。方法未声明优先为 `oi_method_unknown`；窗口历史不足为 `oi_history_insufficient`；参与数据明确缺失为 `oi_missing`。完整数值的可用时间晚于当前读取时间时，先输出 `oi_not_yet_available`，不能提前暴露未来数据造成的零分母结果；数据已到达且分母为0才输出 `oi_zero_scale`。质量缺口和非法窗口使用对应工程原因。完整描述存储保留原值和独立时间，实时消费者按当前 `decision_time` 生成视图；过去单根不可用的 OI 在本次多根/波浪计算时已到达，可以用于本次新描述，但不能回写过去快照。波浪的量价可用时间与 OIz 可用时间分别保存，读取实时波记录必须使用 `realtime_view(decision_time)`。
+
 ### 4.7 零量、缺口、成分变动与修订
 
 - 真实零量 K 线保留，但不触发低量 Spring、Test、ST 或吸收事件；缺失 K 线不能填零。
@@ -403,7 +405,7 @@ active -> superseded
 
 状态转换由第 7.5 节的转换表唯一决定。`exit_*_accepted` 必须指向同方向、同区间版本且当前为 confirmed 的 `acceptance_id`；没有该对象时不得维持 accepted。其他状态：
 
-- `retired`：Phase E 获支持后，在区间外形成满足路径 B 的新整理时，旧区间退役，新区间下一根生效。
+- `retired`：当前仍为 confirmed 的同区间版本、同方向 `acceptance_id` 曾获得 Phase E 规则支持，且在该接纳方向的区间外形成满足路径 B 的新整理时，旧区间退役，新区间下一根生效。不要求整理完成当根仍满足 Phase E 的 ER 条件；失败/过期接纳或其他区间版本的历史支持不能复用。
 - `expired`：前台年龄达到 `range_max_age` 仍无明确外部趋势；超时不代表方向。
 - `superseded`：区间年龄至少 `range_stale_min_age`，最近 `range_stale_bars` 根没有触碰任一边界区域，且区间内部完成一个新的路径 B 区间。新区间作为前台，`parent_range_id` 指向旧区间。
 
@@ -510,6 +512,8 @@ Effort_SC = Effort(p..t)；NS_SC_ref = max(NS_p..NS_t)
 ```
 
 分别输出 `EFFORT_RESULT_NARROW_BAR`、`EFFORT_RESULT_LOW_PROGRESS`，并保存路径距离 `sum(abs(C_i-C_(i-1)))/A`。若存在前台区间且本根触及支撑或阻力区域，另建 `SUPPORT_ABSORPTION_CANDIDATE` 或 `RESISTANCE_ABSORPTION_CANDIDATE`。无区间时只报背离事实。
+
+吸收假设绑定完成根 t 当前生效的前台区间，冻结该区间的 `reference_range_id/version`、S/R/ε。背离事实仍保留模式起始 p−1 的 `onset_snapshot` 和事实参照，不将当前区间伪装为模式开始前已知。起始快照没有区间或是旧区间时，也只允许假设使用完成根当前区间。
 
 后续确认：支撑侧在 1～`absorption_response_max_bars` 根内出现 SOS，或出现 `C>O, NetMove>=strong_bar_min_move_atr, CP>=sos_min_cp` 的向上反应，确认 `SUPPORT_RESPONSE_SEQUENCE`；连续两根收盘 `<S-ε` 使候选失效（`INCL`）。阻力侧对称，确认 `RESISTANCE_RESPONSE_SEQUENCE`。
 
@@ -631,7 +635,7 @@ confirmed 表示规定证据已经满足，不是未来保证。终止对象不�
 
 **两种期限：**
 
-- `confirmation_deadline_bar`：候选最后可确认的根。先完成该根合法确认，仍未确认才 expired。
+- `confirmation_deadline_bar`：有确认过程的候选最后可确认的根。先完成该根合法确认，仍未确认才 expired。第8.4节吸筹/派发结构假设保存 null，不参与第6步确认超时，也不因缺口延长一个不存在的期限。
 - `valid_through_bar`：已确认对象当前有效期的最后一根。在 `t>valid_through_bar` 的第一根开始时 expired，并先级联、后检查依附确认。LPS 可用至 r+lps_current_max_age。
 
 价格失效立即级联；不能先确认子对象、事务末尾再撤销。候选超时保留末根机会。每次依附确认都先检查父对象当前状态及实际可用时间。没有固定当前有效期的对象保存 `valid_through_bar=null`，仍受自身价格失效和区间关闭约束；不能拿原候选确认期限替代确认后的有效期。
@@ -679,6 +683,8 @@ confirmed 表示规定证据已经满足，不是未来保证。终止对象不�
 
 每个区间、方向、来源类型最多一个candidate；confirmed对象不阻止后续新来源。突破有效性同区间同方向最多一个candidate/confirmed对象，同一区间最多一个confirmed acceptance。SC/BC尚无区间时按index_id+timeframe+方向限制候选，不使用不存在的range_id。不同来源的LPS同根满足确认时，按外部突破、内部突破、内部SOS/SOW的优先级选择当前标签；全部合格形态事实保留，未选中的候选以 `not_selected_same_bar` 过期，不反复承接，也不重复触发阶段支持。
 
+Spring/UT 测试每同区间版本、同方向最多一个待确认路径。新收回模式属于不同分支，或新极值向失效侧超过旧极值 ε 时，在第4步将旧 candidate 以 `new_pattern_replaced` 过期，建立独立新路径，冻结新分支、极值、努力、起点和期限。它是候选替换，不改变第7.3/7.4节收盘价格失效条件。同分支且未超过 ε 的新事实只关联旧路径，不改原冻结参照或总期限；confirmed 路径不因新模式替换，已终止对象不复活。
+
 #### 7.1.3 多次测试观察的优先级
 
 ST、Spring Test、UT Test各路径保存一个pending_observation，含q、response_deadline_bar和冻结参照：
@@ -705,6 +711,8 @@ H_j - C_t >= ar_reversal_atr * A_SC
 ```
 
 首个满足的 t 为 `ar_confirmed_at`，冻结 `S=L_SC`、`R=H_j`、`A_ref=A_SC`、`ε=ε_SC`；宽度超过上限时 AR 事实保留，区间候选以 `width_too_large` 拒绝。
+
+宽度拒绝只针对路径 A 区间，止跌/止涨假设仍继续观察 ST 和反应，保存 `range_rejected=width_too_large`；合法闭环与 Phase A 可以确认而不建立区间。
 
 **ST 测试形态，q ∈ ar_confirmed_at+st_window_min ～ ar_confirmed_at+st_window_max：**
 
@@ -755,7 +763,7 @@ V_q > 0
 | `SPRING_LOW_VOLUME`、`SPRING_OTHER` | Test 反应确认；或 tS+spring_sos_window_min～tS+spring_sos_window_max 出现 SOS，输出 `SPRING_SOS_SEQUENCE` |
 | `SPRING_HIGH_VOLUME`、`SHAKEOUT_RECLAIM` | 只能通过 Test 反应确认；SOS 不能替代测试 |
 
-所有分支在收回时即为 Phase C 候选。**失效（`POST`）：** 收盘 `<L_SP-ε`；或 `spring_fail_consecutive_closes` 根连续收盘 `<S-ε`。**超时：** `tS+test_window_max+test_response_max_bars` 仍未确认。Spring 事实始终保留。
+所有分支在收回时即为 Phase C 候选。**失效（`POST`）：** 收盘 `<L_SP-ε`；或 `spring_fail_consecutive_closes` 根连续收盘 `<S-ε`。**超时：** LOW/OTHER 在 `tS+max(test_window_max+test_response_max_bars, spring_sos_window_max)` 末根仍未确认；HIGH/SHAKEOUT 只用 `tS+test_window_max+test_response_max_bars`。测试观察窗口不因另一确认路径延长。Spring 事实始终保留。
 
 ### 7.4 UT → 测试 / SOW
 
@@ -779,7 +787,7 @@ r = q： C_q < O_q，C_q <= R-epsilon，C_q <= L_(q-1) - confirm_step
 r > q： C_r <= min(L_q, ..., L_(r-1)) - confirm_step，C_r < R-epsilon
 ```
 
-Test反应确认后，所属假设confirmed并输出UT_TEST_CONFIRMED；允许窗口内的SOW也可使UT假设confirmed，输出UT_SOW_SEQUENCE。若同一个SOW还确认UTAD序列，共享confirmation_trigger_id。**失效（POST）：** C>H_UT+ε，或spring_fail_consecutive_closes根连续C>R+ε。**超时：** tU+test_window_max+test_response_max_bars处理完仍未确认。深上穿是否必须Test不作对称高量假设，本版本仍允许UT的SOW路径，按分型分组验证。
+Test反应确认后，所属假设confirmed并输出UT_TEST_CONFIRMED；允许窗口内的SOW也可使UT假设confirmed，输出UT_SOW_SEQUENCE。若同一个SOW还确认UTAD序列，共享confirmation_trigger_id。**失效（POST）：** C>H_UT+ε，或spring_fail_consecutive_closes根连续C>R+ε。**超时：** `tU+max(test_window_max+test_response_max_bars, spring_sos_window_max)` 处理完仍未确认。深上穿是否必须Test不作对称高量假设，本版本仍允许UT的SOW路径，按分型分组验证。
 
 ### 7.5 突破假设、接纳对象与区间状态
 
@@ -853,7 +861,7 @@ JOC附加证据shallow_body_retrace：tB之后最低价为pullback_low，`max(0,
 |---|---|---|---|
 | 新建UP_BREAKOUT_VALIDITY的突破根 | 外部R | external_breakout | 对应突破假设 |
 | INTERNAL_JOC | 内部Creek K | internal_break | 无突破父对象 |
-| SOS且C_tX<=R+ε | 已可用最近摆动低点且不低于S，没有则S | internal_sos | 无突破父对象 |
+| SOS且C_tX<=R+ε | 已可用最近摆动低点，index>origin_bar 且 S<=price<=min(R+ε,C_tX)，没有则S | internal_sos | 无突破父对象 |
 
 同根只用最高优先级来源。关联旧候选/接纳的再次越界不是新来源；晚接纳不补建LPS候选。确认前sub_type为空。
 
@@ -927,7 +935,7 @@ RVOL_t >= backup_turn_min_rvol
 |---|---|---|
 | 新建DOWN_BREAKOUT_VALIDITY的突破根 | 外部S | H_q>=S−ε为LPSY_AT_ICE，否则LPSY_BELOW_ICE |
 | INTERNAL_FTI | 内部Ice | 始终LPSY_INTERNAL |
-| SOW且C_tX>=S−ε | 已可用最近摆动高点且不高于R，没有则R | 始终LPSY_INTERNAL |
+| SOW且C_tX>=S−ε | 已可用最近摆动高点，index>origin_bar 且 max(S−ε,C_tX)<=price<=R，没有则R | 始终LPSY_INTERNAL |
 
 tX收盘创建候选，tX+1起每根H_t>L*+ε使候选失效；b为首个C_b>C_(b-1)，q为完整反弹段最高H位置，回撤幅度为`(H_q-min(L_tX..L_(b-1)))/A_b`。先确认，再处理来源以来收盘新低的回合重置。
 
@@ -958,6 +966,8 @@ UTAD 候选在 tU 创建。tU+utad_response_window_min～tU+utad_response_window
 | Phase C / D / E | 引用的底层对象终止时同步撤销；Phase D 规则支持依附于其引用的 LPS/LPSY；没有独立证据时返回未知 |
 
 区间方向标签逐根重算，结构假设保留历史。每个确认序列必须记录evidence_owner_id：吸收响应对应吸收假设，Spring序列对应SPRING_SUPPLY_TEST_HYPOTHESIS，UT序列对应UT_DEMAND_TEST_HYPOTHESIS，UTAD序列对应UTAD假设。确认序列使其owner成为confirmed，并按本节价格失效及证据期限管理当前有效性。当前证据不可评估不等于出现相反证据；只暂停依赖该证据的新确认/支持，不把not_evaluable按false处理。已知的价格失效、父终止和明确期限仍照常执行。
+
+第5步选中的 LPS/LPSY 确认时，同区间版本、同方向且当根仍为 confirmed 的 Spring/UT 更新 `last_evidence=t`、`valid_through_bar=t+bias_sequence_recent_bars`。未选中形态不续期；第3步已价格失效或到期的路径不能复活。
 
 ## 8. 因果波浪与区间方向证据
 
@@ -1073,6 +1083,10 @@ supply_result = 对称路径及约束
 
 更大尺度背景在区间建立时计算并冻结：同周期前 `larger_context_window` 个收盘变化，`SignedDelta >= larger_context_min_displacement_atr` 且 `ER >= larger_context_min_er` 为上涨背景，对称为下跌背景。上涨背景中的吸筹候选显示为 `reaccumulation_candidate`，下跌背景中的派发候选显示为 `redistribution_candidate`。
 
+这些方向结构始终以 candidate 表达当前解释，没有独立 confirmed 入口，`confirmation_deadline_bar=null`；退出只由第7.10节驱动。入口、来源选择及 `last_trigger` 刷新使用同一组当前区间版本、已实际可用、最近窗口内的触发器；LPS/LPSY 的 owner 必须当前 confirmed。先处理本根有效触发，再按“原方向不满足且信号过期”联合条件退出；不可评估不等于原方向为 false。
+
+`last_trigger` 保留最后曾合法采用的触发时间供审计，当前信号是否过期以当前有效触发组为空判断。后来失效的 LPS/LPSY 即使曾被合法采用，也不能继续延长结构寿命；原方向仍成立或不可评估时，联合退出条件仍不成立。
+
 ## 9. 实时状态、记录格式与处理顺序
 
 ### 9.1 市场状态与阶段
@@ -1093,6 +1107,8 @@ supply_result = 对称路径及约束
 - **Phase B 候选：** `phase_b_range`。
 - **Phase C 候选：** Spring / Shakeout / 成熟 UT；Test 反应、UT 测试或 UTAD 弱势序列增强证据。无 Spring/UT 的 Phase C：`not_implemented`。
 - **Phase D 候选：** 存在当前有效的 LPS，且它对应一次 SOS：来源是 `SOS` 或 `INTERNAL_JOC`；或来源是突破且突破强度为 `joc`；或来源是普通突破且来源根之前 `bias_signal_recent_bars` 根内有 SOS。单独的 JOC/FTI 也提供 Phase D 候选。
+
+  单独外部 JOC/FTI 候选随其明确关联的突破假设或接纳当前有效性持续；同区间新接纳不能借用已失败的旧强突破。内部 JOC/FTI 候选随其内部突破来源 LPS/LPSY candidate 持续，确认后按正常 LPS 阶段路径处理。源对象终止、不可用或区间关闭时结束单独候选；无 LPS 时不能产生 D 规则支持。
 - **Phase D 获规则支持：** Phase D 候选，且在 LPS 确认后 `phase_d_followthrough_bars` 根内至少满足一项：
   - 推进：收盘超过该 LPS 回调前的最高价 `max(H_tX..H_(b-1))`；
   - 方向：`demand_dominance_by_rules` 成立。
@@ -1110,6 +1126,8 @@ trend_now: SignedDelta_n > 0 且 Slope_n > 0 且 ER_n >= phase_e_min_er
 向下 Phase E 使用 `outside_down_streak`、`(S-C_t)/A_ref`、负向 SignedDelta 和负向 Slope。ER 不带方向，必须与有方向的位移和斜率同时使用。
 
 Phase E 必须引用当前 `acceptance_id`，并在每根重算上述全部条件。接纳失效/过期时立即撤销；接纳仍有效但位置或趋势条件不成立时结束当前支持，记录 `conditions_no_longer_met`；条件不可评估则输出未知及缺项。以后再次满足只能创建新的阶段支持记录，不能改写旧记录。市场状态的防抖不能延迟对象失效或保留已经撤销的阶段支持。
+
+Phase E 记录同时保存 `reference_range_id/version`；结束记录保留原接纳来源。第5.5节退役可以读取当前接纳的历史支持，不把历史支持重新显示为当前 Phase E。
 
 多个阶段解释可以并存或未知。`phase_supported_by_rules` 必须附证据 ID、确认时间和失效条件。
 
@@ -1163,8 +1181,8 @@ Phase E 必须引用当前 `acceptance_id`，并在每根重算上述全部条�
   "data_profile": "weighted_index",
   "index_source": "vendor_placeholder",
   "timeframe": "15m",
-  "rule_version": "4.0",
-  "parameter_version": "v4-default-unvalidated",
+  "rule_version": "4.1",
+  "parameter_version": "v4.1-default-unvalidated",
   "market_regime": "range",
   "trend_now": "downtrend",
   "structure": {
@@ -1332,6 +1350,8 @@ Phase E 必须引用当前 `acceptance_id`，并在每根重算上述全部条�
 
 参数取值必须满足：成对的最小/最大窗口参数满足 `min <= max`；`spring_low_volume_max_rvol < spring_high_volume_min_rvol`；`range_min_width_atr < range_max_width_atr`；`mature_range_age >= event_min_range_age`；`spring_max_pattern_bars ∈ {1,2}` 且 `shakeout_max_pattern_bars >= spring_max_pattern_bars`；`lps_min_pullback_bars < lps_max_pullback_bars`；`strict_backup_min_pullback_bars <= lps_max_pullback_bars`；`warmup_bars` 覆盖所有启用窗口。价格分辨率、ATR与量能倍数为正；根数为正整数，`confirm_step_units` 为正整数；`wave_dominance_ratio>1`，`0<breakout_fail_deep_fraction<1`。不满足时拒绝运行，不静默修正。
 
+为了保证 JOC/FTI 蕴含 SOS/SOW 特征，必须有 `strong_break_min_rvol >= sos_sow_min_rvol`、`strong_break_min_ns >= sos_sow_min_ns`、`joc_min_cp >= sos_min_cp`、`fti_max_cp <= sow_max_cp`。校准邻域也不得越过这些跨参数约束；总候选期限按第7.3/7.4节允许路径的最大截止计算，不能截断合法 SOS/SOW 窗口。
+
 | V2 参数 | V4 处理 |
 |---|---|
 | `roll_confirm_days`、`liquid_min_ratio` | 删除（不覆盖实际合约） |
@@ -1473,6 +1493,20 @@ evaluation_start_at = bar_start(j)
 
 `pre_crossed` 单独描述“以原信号根为参照的障碍，在tau之前已被价格穿越”。完整发生在tau之前的K线可证明该事实；跨越tau的K线只能给出 `pre_crossed_unknown` / `availability_overlap`，不能猜测。该字段不把过去的命中计为预测成功，也不能依据事后结果选择性删除默认评价样本。
 
+评价接口 `evaluate_ohlc` 的补充输入为 `direction∈{-1,+1}`、`signal_reference`（原信号根及其已知 ATR）和 `data_version`。原信号根统一登记为：事实事件的模式完成根 `pattern_end`，确认序列的反应确认根；不使用多根模式第一根冒充可发布信号根。原根障碍取其收盘 ± `barrier_atr*原根ATR`，两侧任一被原根之后、tau之前的完整K线触及（含等号）即 `pre_crossed=true`；已有完整根证明 true 时，不被后续未知窗口抵消。没有证明且期间存在缺失/迟到行情或跨越 tau 的K线则为 null，原因 `pre_crossed_unknown`。原根/ATR未提供或尚未可用分别为 `signal_reference_missing` / `signal_reference_unavailable`。日历须覆盖原根收盘至tau和未来评价窗口的全部应有交易时段；原信号根自身不计穿越，禁止用评价锚点替代原信号参照。
+
+方向净位移、MFE/MAE 和回撤统一相对于评价锚点 `C_a`、用冻结 `ATR_a` 标准化，统计 j 起完整 horizon 根（默认20），首次触障后仍继续补充统计：
+
+```text
+d = direction
+方向净位移 = d*(最后评价收盘-C_a)
+MFE = max(0, max(H_i-C_a))（d=+1）；max(0, max(C_a-L_i))（d=-1）
+MAE = max(0, max(C_a-L_i))（d=+1）；max(0, max(H_i-C_a))（d=-1）
+回撤 = 对 z_0=0、z_i=d*(C_i-C_a) 的收盘路径计算 max_{u<=v}(z_u-z_v)
+```
+
+每项同时输出原始价格单位和 `_atr` 字段。回撤只使用收盘路径，不推测同根高低点先后。`path_bar_count`、`metrics_complete`、`metrics_reasons` 明示完整性；缺口即停，不跳过补足。若首次障碍已经判定，后续缺口不撤销命中标签，但补充统计标为部分样本；未命中且缺口/数据终点不足期限仍为 censored。没有 direction 时，方向统计为 null、原因 `direction_unknown`，对称障碍标签仍可计算。
+
 有可靠逐笔数据时，可另设 `evaluation_path_mode=timestamp_path`，从tau截取真实路径；另行登记首个有效价格、事前ATR、评价期限和数据版本。它是独立评价配置，不能逐事件挑选与OHLC模式中更有利的结果。两种口径均只衡量指数信号的预测表现，不模拟可成交收益。
 
 ### 11.5 逐模块增量检验
@@ -1597,6 +1631,24 @@ evaluation_start_at = bar_start(j)
 | 3.4：不要持续扩大事件范围 | 保留V3既有形态及8个首轮参数；新增的是状态记录和验收，不新增市场形态 | 6.8、10.6、12 | A/B/C回归与D组 |
 
 实施冻结条件：A/B/C/D与第11.1节工程检查全部通过，并形成可复现回放记录。市场研究通过与否另作判断，不用文档完整或构造用例通过替代样本外结果。
+
+### A.4 V4.0 评审修复与口径澄清
+
+V4.1 由 V4.0 当前实现逐项反例核验后修订。ER20/ER30 不是数学互斥，旧 LOW Spring 在深影线后不必价格失效，完整波描述存储也不等同于实时快照泄漏；修复采用正文的明确规则，不采用这些过强推论。
+
+| 评审条目 | V4.1 处置 | 章节 |
+|---|---|---|
+| DOC-01 / CODE-04 | 同一当前有效接纳曾获得 Phase E 后，可在同向区间外整理完成时退役；历史记录绑定区间版本 | 5.5、9.1 |
+| DOC-02 / CODE-02 | STRUCTURE 无确认期限，按联合条件退出；本根触发先刷新 | 7.1、8.4 |
+| DOC-03 | JOC/SOS 跨阈值约束；允许 Test/SOS 的路径总期限取最大截止 | 7.3、7.4、10.6 |
+| CODE-03 | 新分支/更深极值替换待确认测试路径，冻结新参照；保持收盘价格失效 | 7.1.2 |
+| CODE-05 | 结构入口、来源、续期复用当前有效且可用触发器 | 8.4 |
+| DOC-04 / CODE-06 | range_only 不创建内部 LPS；内部参照摆动限定原点后及对称价格范围 | 5.6、7.6、7.7 |
+| DOC-05 / CODE-01 | 背离事实保留 onset，吸收假设冻结完成根当前区间，避免空边界 | 6.3 |
+| CODE-07 / CODE-10 OI | 共享窗口计算和原因码；保留完整存储，按当前时间读实时视图 | 4.6 |
+| CODE-08 | 宽度超限只拒绝路径 A 区间，继续止跌/止涨闭环 | 7.2 |
+| CODE-09 | 单独 D 候选依附来源持续；有效且选中的新 LPS 给同向测试续期 | 7.10、9.1 |
+| CODE-10 评价 | 原信号参照、pre_crossed、完整评价路径方向位移/回撤/MFE/MAE 和部分样本标记 | 11.4 |
 
 ## 附录 B：参考资料与来源边界
 

@@ -8,7 +8,7 @@ import statistics
 from .evidence import SequenceRecord
 from .indicators import BarFeatures, SwingKind, SwingPoint
 from .output import Occurrence, Transition, at_least_step, dec, outside
-from .params import WyckoffV4Params
+from .params import CreekMode, WyckoffV4Params
 from .range import TradingRange, RangeRejection, establish_path_a, ols_slope
 from .types import AcceptanceMode, CountingOrigin, EventCode as E, HypothesisStatus as H, RangeState as R
 
@@ -23,7 +23,7 @@ class Hypothesis:
     reference_range_id: str | None
     reference_range_version: int | None
     created_bar: int
-    confirmation_deadline_bar: int
+    confirmation_deadline_bar: int | None
     created_at: datetime
     status_available_at: datetime
     frozen_S: float | None = None
@@ -139,13 +139,18 @@ class Lifecycle:
         self.transitions.append(tr)
         self.new_transitions.append(tr)
 
-    def _new(self, kind: str, d: int, event: Occurrence, deadline: int,
+    def _new(self, kind: str, d: int, event: Occurrence, deadline: int | None,
              *, source_kind: str = "fact", parent: tuple[str, str] | None = None,
-             origin: CountingOrigin = CountingOrigin.POST, **data) -> Hypothesis | None:
+             origin: CountingOrigin = CountingOrigin.POST,
+             reference_range: TradingRange | None = None, **data) -> Hypothesis | None:
+        # Some interpretations bind the completion-time foreground range while
+        # preserving the source fact's earlier onset snapshot for audit.
+        range_id = reference_range.range_id if reference_range else event.reference_range_id
+        range_version = reference_range.version if reference_range else event.reference_range_version
         existing = next((h for h in self.hypotheses.values() if h.status is H.CANDIDATE and
                          h.hypothesis_type == kind and h.direction == d and h.source_kind == source_kind and
                          (kind == "CLIMAX" or (h.reference_range_id, h.reference_range_version) ==
-                          (event.reference_range_id, event.reference_range_version))), None)
+                          (range_id, range_version))), None)
         if existing:
             existing.supporting_evidence_ids.append(event.event_id)
             return None
@@ -154,9 +159,11 @@ class Lifecycle:
         identifier = f"H:{kind}:{d}:{event.event_id}:{self.t}"
         if identifier in self.hypotheses:
             raise ValueError("hypothesis_id_already_registered")
-        h = Hypothesis(identifier, kind, d, source_kind, (event.event_id,), event.reference_range_id,
-                       event.reference_range_version, self.t, deadline, self.features[-1].bar.bar_end, self.now,
-                       event.frozen_S, event.frozen_R, event.frozen_epsilon or 0,
+        h = Hypothesis(identifier, kind, d, source_kind, (event.event_id,), range_id,
+                       range_version, self.t, deadline, self.features[-1].bar.bar_end, self.now,
+                       reference_range.S if reference_range else event.frozen_S,
+                       reference_range.R if reference_range else event.frozen_R,
+                       reference_range.epsilon if reference_range else event.frozen_epsilon or 0,
                        counting_origin=origin,
                        counting_origin_bar=self.t, data={**event.metrics, **data, "source": event})
         h.confirmation_conditions, h.invalidation_conditions = self._conditions(h)
@@ -164,6 +171,24 @@ class Lifecycle:
         self.bind_parent(h, parent)
         self._created(h)
         return h
+
+    def _new_test_episode(self, kind: str, d: int, event: Occurrence,
+                          deadline: int) -> Hypothesis | None:
+        """Replace a pending test when a new branch or deeper pattern arrives.
+
+        This is an episode transition, not a wick-based price invalidation.
+        Confirmed episodes retain their existing close-based failure rules.
+        """
+        existing = next((h for h in self.hypotheses.values() if h.status is H.CANDIDATE and
+                         h.hypothesis_type == kind and h.direction == d and
+                         (h.reference_range_id, h.reference_range_version) ==
+                         (event.reference_range_id, event.reference_range_version)), None)
+        if existing:
+            deeper = d * (dec(event.metrics["extreme"]) - dec(existing.data["extreme"])) < -dec(existing.frozen_epsilon)
+            if existing.data.get("branch") != event.event_type.value or deeper:
+                self._change(existing, H.EXPIRED, "new_pattern_replaced")
+        return self._new(kind, d, event, deadline, branch=event.event_type.value,
+                         last_evidence=self.t)
 
     def _conditions(self, h: Hypothesis) -> tuple[tuple[dict, ...], tuple[dict, ...]]:
         """Save rule references, frozen prices and counting origins for audit."""
@@ -274,7 +299,7 @@ class Lifecycle:
         for h in self.hypotheses.values():
             if not self._active(h):
                 continue
-            if h.status is H.CANDIDATE:
+            if h.status is H.CANDIDATE and h.confirmation_deadline_bar is not None:
                 h.confirmation_deadline_bar += 1
             if h.valid_through_bar is not None:
                 h.valid_through_bar += 1
@@ -360,7 +385,8 @@ class Lifecycle:
         p, t = self.params, self.t
         for position, event in enumerate(facts):
             code, data = event.event_type, event.metrics
-            if event.reference_range_id is not None and (self.rng is None or
+            absorption_fact = code in (E.EFFORT_RESULT_NARROW_BAR, E.EFFORT_RESULT_LOW_PROGRESS)
+            if not absorption_fact and event.reference_range_id is not None and (self.rng is None or
                     (event.reference_range_id, event.reference_range_version) != (self.rng.range_id, self.rng.version)):
                 # Old reclaim watches may finish factual observations, but cannot
                 # create hypotheses against a retired foreground range.
@@ -374,10 +400,13 @@ class Lifecycle:
                         h.frozen_epsilon = max(p.boundary_resolution_units * self.resolution, p.boundary_atr_fraction * a)
                         h.confirmation_conditions, h.invalidation_conditions = self._conditions(h)
             elif code in (E.SPRING_LOW_VOLUME, E.SPRING_HIGH_VOLUME, E.SPRING_OTHER, E.SHAKEOUT_RECLAIM):
-                self._new("SPRING", 1, event, t + p.test_window_max + p.test_response_max_bars,
-                          branch=code.value, last_evidence=t)
+                window = p.test_window_max + p.test_response_max_bars
+                if code in (E.SPRING_LOW_VOLUME, E.SPRING_OTHER):
+                    window = max(window, p.spring_sos_window_max)
+                self._new_test_episode("SPRING", 1, event, t + window)
             elif code in (E.UT_FEATURE, E.UPTHRUST_DEEP_REJECTION):
-                self._new("UT", -1, event, t + p.test_window_max + p.test_response_max_bars, last_evidence=t)
+                window = max(p.test_window_max + p.test_response_max_bars, p.spring_sos_window_max)
+                self._new_test_episode("UT", -1, event, t + window)
                 onset = event.onset_snapshot
                 if onset and onset.range_age >= p.mature_range_age and onset.dominance == "supply":
                     self._new("UTAD", -1, event, t + p.utad_response_window_max, last_evidence=t)
@@ -409,22 +438,26 @@ class Lifecycle:
                     touches = self.rng.touches_support(f.bar.high, f.bar.low) if d == 1 else self.rng.touches_resistance(f.bar.high, f.bar.low)
                     if touches:
                         self._new("ABSORPTION", d, event, t + p.absorption_response_max_bars,
-                                  origin=CountingOrigin.INCL)
+                                  origin=CountingOrigin.INCL, reference_range=self.rng)
         # One source per side per close, in the declared priority order.
         for d in (1, -1):
             if self.rng is None:
                 break
             parent = self._new_breakouts.get(d)
-            internal = next((e for e in facts if e.event_type is (E.INTERNAL_JOC if d == 1 else E.INTERNAL_FTI)), None)
+            internal_enabled = p.creek_mode is CreekMode.RANGE_AND_INTERNAL
+            internal = next((e for e in facts if e.event_type is (E.INTERNAL_JOC if d == 1 else E.INTERNAL_FTI)), None) if internal_enabled else None
             strong = next((e for e in facts if e.event_type is (E.SOS if d == 1 else E.SOW)), None)
             if parent:
                 event, source, level = parent.data["source"], "external_breakout", self.rng.R if d == 1 else self.rng.S
             elif internal:
                 event, source, level = internal, "internal_break", internal.frozen_internal_level
-            elif strong and not outside(self.features[-1].bar.close, self.rng.R if d == 1 else self.rng.S, self.rng.epsilon, d):
+            elif strong and internal_enabled and not outside(self.features[-1].bar.close, self.rng.R if d == 1 else self.rng.S, self.rng.epsilon, d):
                 event, source = strong, "internal_sos"
-                eligible = [s for s in swings if s.usable_from_index <= t and s.kind is (SwingKind.LOW if d == 1 else SwingKind.HIGH) and
-                            (s.price >= self.rng.S if d == 1 else s.price <= self.rng.R)]
+                close = self.features[-1].bar.close
+                eligible = [s for s in swings if s.usable_from_index <= t and s.index > self.rng.origin_bar and
+                            s.kind is (SwingKind.LOW if d == 1 else SwingKind.HIGH) and
+                            (dec(self.rng.S) <= dec(s.price) <= min(dec(self.rng.R) + dec(self.rng.epsilon), dec(close)) if d == 1 else
+                             max(dec(self.rng.S) - dec(self.rng.epsilon), dec(close)) <= dec(s.price) <= dec(self.rng.R))]
                 level = max(eligible, key=lambda s: s.confirmed_at_index).price if eligible else self.rng.S if d == 1 else self.rng.R
             else:
                 continue
@@ -583,7 +616,7 @@ class Lifecycle:
             h.data["ar_record"] = {"type": "AR_RALLY" if d == 1 else "AR_REACTION", "confirmed_bar": t,
                                    "available_at": self.now, "extreme_bar": t0 + 1 + j}
             if h.frozen_R - h.frozen_S > p.range_max_width_atr * a:
-                self._change(h, H.EXPIRED, "width_too_large")
+                h.data["range_rejected"] = "width_too_large"
             return
         self._test(h)
 
@@ -659,6 +692,8 @@ class Lifecycle:
             if not isinstance(candidate, RangeRejection):
                 self.path_a_ranges.append(candidate)
                 h.data["path_a_range_id"] = candidate.range_id
+            else:
+                h.data["range_rejected"] = candidate.reason
         else:
             self._confirm_sequence(h, E.SPRING_TEST_CONFIRMED if h.direction == 1 else E.UT_TEST_CONFIRMED, trigger)
             if h.direction == 1:
@@ -732,6 +767,11 @@ class Lifecycle:
             h.valid_through_bar = t + p.lps_current_max_age
             self._emit(E.LPS if d == 1 else E.LPSY, owner=h, acceptance=acceptance,
                        sub_type=subtype, metrics={"q": q, "b": b, "pullback_extreme": extreme, "pre_pullback_extreme": pre_extreme, "strict_v1": strict})
+            for episode in self.hypotheses.values():
+                if episode.status is H.CONFIRMED and episode.hypothesis_type in ("SPRING", "UT") and episode.direction == d and (
+                        episode.reference_range_id, episode.reference_range_version) == (h.reference_range_id, h.reference_range_version):
+                    episode.data["last_evidence"] = t
+                    episode.valid_through_bar = t + p.bias_sequence_recent_bars
             key = (h.reference_range_id, h.reference_range_version, d)
             old_id = self.current_lps.get(key)
             old = self.hypotheses.get(old_id)
@@ -763,7 +803,7 @@ class Lifecycle:
 
     def expire_candidates(self) -> None:
         for h in sorted(self.hypotheses.values(), key=lambda h: h.hypothesis_id):
-            if h.status is H.CANDIDATE and self.t >= h.confirmation_deadline_bar:
+            if h.status is H.CANDIDATE and h.confirmation_deadline_bar is not None and self.t >= h.confirmation_deadline_bar:
                 self._change(h, H.EXPIRED, "confirmation_deadline")
                 if h.hypothesis_type == "BREAKOUT" and self._matching(h):
                     c = self.features[-1].bar.close

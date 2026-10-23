@@ -69,6 +69,7 @@ from cta_lab.wyckoff_v4.indicators import (
     OiZWindow,
     cumulative_effort,
     effort_ratio,
+    oi_z_from_features,
 )
 from cta_lab.wyckoff_v4.params import WyckoffV4Params
 
@@ -130,6 +131,10 @@ class WaveRecord:
     constituent_change: bool
     minimum_close: float | None = None
     maximum_close: float | None = None
+
+    def realtime_view(self, decision_time: datetime) -> "WaveRecord":
+        """Hide OI unavailable at the read time without rewriting this record."""
+        return dataclasses.replace(self, wave_oiz=self.wave_oiz.realtime_view(decision_time))
 
 
 @dataclass
@@ -439,42 +444,7 @@ class WaveState:
 
     def _wave_oiz(self, a: int, e: int) -> OiZWindow:
         """OIz(a..e) of spec 4.6 replicated from per-bar OiFeatures."""
-        n = self._params.oi_window
-        if e < a:
-            return OiZWindow(
-                NumFeature.not_evaluable(NotEvaluableReason.WINDOW_INVALID),
-                None,
-            )
-        if a - n < 0:
-            return OiZWindow(
-                NumFeature.not_evaluable(NotEvaluableReason.OI_HISTORY_INSUFFICIENT),
-                None,
-            )
-        records = self._features[a - n : e + 1]
-        d_features = [g.oi.d_oi for g in records]
-        for feat in d_features:
-            if not feat.is_available:
-                return OiZWindow(
-                    NumFeature.not_evaluable(
-                        feat.reason or NotEvaluableReason.OI_MISSING
-                    ),
-                    None,
-                )
-        denominator = [f.value for f in d_features[:n]]
-        numerator = [f.value for f in d_features[n:]]
-        scale = statistics.median([abs(v) for v in denominator])
-        if scale <= 0:
-            return OiZWindow(
-                NumFeature.not_evaluable(NotEvaluableReason.OI_ZERO_SCALE),
-                None,
-            )
-        available_ats = [
-            g.oi.d_oi_available_at for g in records if g.oi.d_oi_available_at is not None
-        ]
-        return OiZWindow(
-            NumFeature.available(sum(numerator) / scale),
-            max(available_ats) if available_ats else None,
-        )
+        return oi_z_from_features(self._features, a, e, self._params.oi_window)
 
 
 def run_segmentation(

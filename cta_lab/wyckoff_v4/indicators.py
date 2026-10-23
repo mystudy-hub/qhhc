@@ -52,9 +52,9 @@ SPEC DECISIONS (literal-reading choices):
   feature is not_evaluable with oi_method_unknown. A declared non-empty
   oi_method is treated as a registered identifier (section 4.1) and is not
   re-validated here.
-- dOI history: the OIz denominator is the median of the last n_oi
-  *computable* dOI magnitudes; bars without a computable dOI simply do not
-  contribute, and fewer than n_oi contributions => oi_history_insufficient.
+- dOI history: the OIz denominator uses the preceding n_oi consecutive
+  computable changes. Missing OI clears the contiguous history instead of
+  skipping a bar to borrow an older sample; insufficient history is explicit.
 - Late OI (4.6): the OiFeatures embedded in BarFeatures is the descriptive
   (ex-post) record; it carries each feature's available_at (the maximum
   contributing oi_available_at, never earlier). realtime_view() returns the
@@ -184,24 +184,24 @@ class OiFeatures:
     oi_quadrant_available_at: datetime | None
     computation_time: datetime
 
-    def realtime_view(self) -> "OiFeatures":
-        """Realtime snapshot: late features are oi_not_yet_available."""
+    def realtime_view(self, decision_time: datetime | None = None) -> "OiFeatures":
+        """View at a decision time; the default is this bar's computation time."""
+        asof = self.computation_time if decision_time is None else decision_time
         ne = NumFeature.not_evaluable(NotEvaluableReason.OI_NOT_YET_AVAILABLE)
         d = self.d_oi
         if d.is_available and self.d_oi_available_at is not None:
-            if self.d_oi_available_at > self.computation_time:
+            if self.d_oi_available_at > asof:
                 d = ne
         z = self.oi_z
         z_late = (
-            z.is_available
-            and self.oi_z_available_at is not None
-            and self.oi_z_available_at > self.computation_time
+            self.oi_z_available_at is not None
+            and self.oi_z_available_at > asof
         )
         if z_late:
             z = ne
         quadrant = self.oi_quadrant
         q_reason = self.oi_quadrant_reason
-        if z_late and quadrant is not None:
+        if z_late:
             quadrant = None
             q_reason = NotEvaluableReason.OI_NOT_YET_AVAILABLE
         return OiFeatures(
@@ -286,6 +286,48 @@ class OiZWindow:
 
     num: NumFeature
     available_at: datetime | None
+
+    def realtime_view(self, decision_time: datetime) -> "OiZWindow":
+        """Mask a future OI result while preserving its descriptive record."""
+        if self.available_at is not None and self.available_at > decision_time:
+            return OiZWindow(
+                NumFeature.not_evaluable(NotEvaluableReason.OI_NOT_YET_AVAILABLE),
+                self.available_at,
+            )
+        return self
+
+
+def oi_z_from_features(features: Sequence[BarFeatures], start: int, end: int,
+                       window: int, *, decision_time: datetime | None = None,
+                       oi_method_known: bool | None = None) -> OiZWindow:
+    """Shared OIz calculation from complete descriptive per-bar records.
+
+    Method declaration precedes window/history checks. Missing or invalid
+    inputs precede late availability; future zero-scale inputs reveal only
+    oi_not_yet_available until their availability time.
+    """
+    if oi_method_known is False or (oi_method_known is None and any(
+            f.oi.d_oi.reason is NotEvaluableReason.OI_METHOD_UNKNOWN for f in features)):
+        return OiZWindow(NumFeature.not_evaluable(NotEvaluableReason.OI_METHOD_UNKNOWN), None)
+    if not 0 <= start <= end < len(features):
+        return OiZWindow(NumFeature.not_evaluable(NotEvaluableReason.WINDOW_INVALID), None)
+    if start < window:
+        return OiZWindow(NumFeature.not_evaluable(NotEvaluableReason.OI_HISTORY_INSUFFICIENT), None)
+    records = features[start - window:end + 1]
+    unavailable = [f.oi.d_oi for f in records if not f.oi.d_oi.is_available]
+    if unavailable:
+        first = next((num for num in unavailable
+                      if num.reason is not NotEvaluableReason.OI_NOT_YET_AVAILABLE), unavailable[0])
+        return OiZWindow(NumFeature.not_evaluable(first.reason or NotEvaluableReason.OI_MISSING), None)
+    available_ats = [f.oi.d_oi_available_at for f in records if f.oi.d_oi_available_at is not None]
+    available_at = max(available_ats) if available_ats else None
+    if decision_time is not None and available_at is not None and available_at > decision_time:
+        return OiZWindow(NumFeature.not_evaluable(NotEvaluableReason.OI_NOT_YET_AVAILABLE), available_at)
+    scale = statistics.median(abs(f.oi.d_oi.value) for f in records[:window])
+    if scale <= 0:
+        return OiZWindow(NumFeature.not_evaluable(NotEvaluableReason.OI_ZERO_SCALE), available_at)
+    return OiZWindow(NumFeature.available(sum(f.oi.d_oi.value for f in records[window:]) / scale),
+                     available_at)
 
 
 def true_range(
@@ -785,7 +827,7 @@ class IndicatorState:
                 oi_z = NumFeature.not_evaluable(
                     NotEvaluableReason.OI_ZERO_SCALE
                 )
-                z_at = None
+                z_at = max([at for _v, at in self._doi_deque] + [d_at])
             else:
                 oi_z = NumFeature.available(d_oi.value / scale)
                 z_at = max([at for _v, at in self._doi_deque] + [d_at])
@@ -857,49 +899,10 @@ class IndicatorState:
             return records
         return cumulative_effort([r.rvol for r in records])
 
-    def oi_z_window(self, start: int, end: int) -> OiZWindow:
+    def oi_z_window(self, start: int, end: int, *, decision_time: datetime | None = None) -> OiZWindow:
         """OIz(a..b) of spec 4.6 with its feature_available_at."""
-        if not self._oi_method:
-            return OiZWindow(
-                NumFeature.not_evaluable(NotEvaluableReason.OI_METHOD_UNKNOWN),
-                None,
-            )
-        if not (0 <= start <= end < len(self._history)):
-            return OiZWindow(
-                NumFeature.not_evaluable(NotEvaluableReason.WINDOW_INVALID),
-                None,
-            )
-        n = self._params.oi_window
-        if start - n < 0:
-            return OiZWindow(
-                NumFeature.not_evaluable(
-                    NotEvaluableReason.OI_HISTORY_INSUFFICIENT
-                ),
-                None,
-            )
-        records = self._history[start - n : end + 1]
-        denominator = records[:n]
-        numerator = records[n:]
-        if any(r.d_oi is None for r in records):
-            return OiZWindow(
-                NumFeature.not_evaluable(NotEvaluableReason.OI_MISSING), None
-            )
-        scale = statistics.median([abs(r.d_oi) for r in denominator])
-        if scale <= 0:
-            return OiZWindow(
-                NumFeature.not_evaluable(NotEvaluableReason.OI_ZERO_SCALE),
-                None,
-            )
-        value = sum(r.d_oi for r in numerator) / scale
-        available_ats = [
-            r.d_oi_available_at
-            for r in records
-            if r.d_oi_available_at is not None
-        ]
-        return OiZWindow(
-            NumFeature.available(value),
-            max(available_ats) if available_ats else None,
-        )
+        return oi_z_from_features(self._features, start, end, self._params.oi_window,
+                                  decision_time=decision_time, oi_method_known=bool(self._oi_method))
 
     # --- causal swing points (spec 5.6) -----------------------------------
 
@@ -981,6 +984,7 @@ __all__ = [
     "OiFeatures",
     "OiQuadrant",
     "OiZWindow",
+    "oi_z_from_features",
     "SwingDiscard",
     "SwingKind",
     "SwingPoint",

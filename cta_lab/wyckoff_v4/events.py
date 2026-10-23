@@ -5,9 +5,8 @@ from collections import deque
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Callable
-import statistics
 
-from .indicators import BarFeatures, SwingPoint
+from .indicators import BarFeatures, SwingPoint, oi_z_from_features
 from .output import ContextSnapshot, Occurrence, RuleEvaluation, dec, outside
 from .params import CreekMode, WyckoffV4Params
 from .range import TradingRange, internal_creek, internal_ice
@@ -104,7 +103,7 @@ class EventDetector:
         start = t if start is None else start
         onset = onset or self.ring.get(start - 1)
         f = self._features[t]
-        oi = f.oi.realtime_view()
+        oi = f.oi.realtime_view(self._now)
         values = {k: getattr(f, k).value for k in ("rvol", "ns", "cp", "lw", "uw", "net_move", "gap")}
         values.update({"atr": self._features[start].atr_baseline.value,
                        "effort": self._effort(start),
@@ -114,23 +113,11 @@ class EventDetector:
                        "oi_reason": oi.oi_z.reason})
         values.update(metrics or {})
         if start < t:
-            records = self._features[start:t + 1]
-            prior = self._features[max(0, start - self.params.oi_window):start]
-            doi = [g.oi.realtime_view().d_oi.value for g in records]
-            scale_values = [g.oi.realtime_view().d_oi.value for g in prior]
-            reason = None
-            if any(v is None for v in doi):
-                reason = "oi_missing_or_not_yet_available"
-            elif len(prior) < self.params.oi_window or any(v is None for v in scale_values):
-                reason = "oi_history_insufficient"
-            else:
-                scale = statistics.median(abs(v) for v in scale_values)
-                if scale <= 0:
-                    reason = "oi_zero_scale"
-            values["oiz"] = sum(doi) / scale if reason is None else None
-            values["oi_reason"] = reason
-            contributing = [g.oi.d_oi_available_at for g in [*prior, *records] if g.oi.d_oi_available_at is not None]
-            values["oiz_feature_available_at"] = max(contributing) if reason is None and contributing else None
+            window_oi = oi_z_from_features(self._features, start, t, self.params.oi_window,
+                                           decision_time=self._now)
+            values["oiz"] = window_oi.num.value
+            values["oi_reason"] = window_oi.num.reason
+            values["oiz_feature_available_at"] = window_oi.available_at
         standard = {"atr": f.atr_baseline_standard, "bv": f.bv_baseline_standard.value,
                     "rvol": f.bar.volume / f.bv_baseline_standard.value
                     if f.bv_baseline_standard.value else None,

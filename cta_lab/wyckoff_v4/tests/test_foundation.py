@@ -159,8 +159,8 @@ def test_event_code_table_complete():
 def test_default_params_validate():
     params = WyckoffV4Params()
     params.validate()
-    assert params.rule_version == "4.0"
-    assert params.parameter_version == "v4-default-unvalidated"
+    assert params.rule_version == "4.1"
+    assert params.parameter_version == "v4.1-default-unvalidated"
     # F-15: max(3, 2, 3) + 1 = 4.
     assert params.snapshot_ring_length == 4
     assert dataclasses.replace(params, spring_max_pattern_bars=1).snapshot_ring_length == 4
@@ -220,6 +220,7 @@ def test_default_params_validate():
         # mode switches and versions.
         ({"baseline_mode": "robust"}, "baseline_mode"),
         ({"rule_version": "3.0"}, "rule_version"),
+        ({"rule_version": "4.0"}, "rule_version"),
         ({"parameter_version": ""}, "parameter_version"),
     ],
 )

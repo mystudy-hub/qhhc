@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any
 
 from .types import EventCode, TriState, TrendState
+from .params import PARAMETER_VERSION, RULE_VERSION
 
 
 def primitive(value: Any) -> Any:
@@ -88,8 +89,8 @@ class Occurrence:
     index_method_version: str = ""
     timeframe: str = ""
     baseline_mode: str = ""
-    rule_version: str = "4.0"
-    parameter_version: str = "v4-default-unvalidated"
+    rule_version: str = RULE_VERSION
+    parameter_version: str = PARAMETER_VERSION
     data_version: str = ""
     data_asof: datetime | None = None
     onset_snapshot_id: str | None = None

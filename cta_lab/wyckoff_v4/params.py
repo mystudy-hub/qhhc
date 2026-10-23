@@ -30,8 +30,8 @@ SPEC DECISIONS (literal-reading choices):
   0 < breakout_fail_deep_fraction < 1, wave_dominance_ratio > 1).
 - price_resolution is a series-level field (section 4.1) and its positivity
   constraint is enforced in contract.py where it is declared.
-- rule_version is validated to equal '4.0': this package implements only the
-  V4 ruleset, and running V4 code under another rule_version label would be a
+- rule_version is validated to equal '4.1': this package implements only the
+  V4.1 ruleset, and running this code under another rule_version label would be a
   silent mislabel rather than a different ruleset.
 """
 
@@ -70,8 +70,8 @@ class CreekMode(Enum):
     RANGE_ONLY = "range_only"
 
 
-RULE_VERSION = "4.0"
-PARAMETER_VERSION = "v4-default-unvalidated"
+RULE_VERSION = "4.1"
+PARAMETER_VERSION = "v4.1-default-unvalidated"
 
 # Float fields that must be strictly positive (10.6: ATR and volume/activity
 # multipliers are positive). ATR-family thresholds first, then volume/effort
@@ -371,6 +371,13 @@ class WyckoffV4Params:
             raise ValueError("volume_min_samples must not exceed volume_period")
         if self.session_min_samples > self.session_baseline_days:
             raise ValueError("session_min_samples must not exceed session_baseline_days")
+        for strong, ordinary in (("strong_break_min_rvol", "sos_sow_min_rvol"),
+                                 ("strong_break_min_ns", "sos_sow_min_ns"),
+                                 ("joc_min_cp", "sos_min_cp")):
+            if getattr(self, strong) < getattr(self, ordinary):
+                raise ValueError(f"{strong} must be >= {ordinary}")
+        if self.fti_max_cp > self.sow_max_cp:
+            raise ValueError("fti_max_cp must be <= sow_max_cp")
         for name in ("trend_min_er", "larger_context_min_er", "generic_range_max_er",
                      "phase_e_min_er", "range_interior_close_fraction", "sc_min_cp",
                      "bc_max_cp", "climax_min_rejection_wick", "spring_min_cp",
